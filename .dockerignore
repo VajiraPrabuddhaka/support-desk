@@ -1,0 +1,9 @@
+.env
+.env.*
+.secrets/
+.git/
+infra/
+scripts/
+compose.yaml
+Makefile
+README.md
