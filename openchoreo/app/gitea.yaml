@@ -1,0 +1,81 @@
+# Gitea, the ticket system. Its data and its generated app.ini live on two
+# volumes, and its web UI is exposed through the gateway.
+# Order matters: kubectl applies these top to bottom. The ReleaseBinding and the
+# Workload exist before the Component, so autoDeploy finds them.
+# Created before the Component, so autoDeploy keeps these settings and only fills
+# in the release. The external hostname is
+# <endpoint>-<component>-<environment>-<namespace>-<hash>.openchoreoapis.localhost,
+# where the hash is computed from the same names, so it is stable.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ReleaseBinding
+metadata:
+  name: gitea-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: gitea
+  environment: development
+  componentTypeEnvironmentConfigs:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 512Mi}
+  traitEnvironmentConfigs:
+    data:
+      size: 1Gi
+    config:
+      size: 100Mi
+  workloadOverrides:
+    container:
+      env:
+        - key: GITEA__server__ROOT_URL
+          value: http://http-gitea-development-default-e9dbaee7.openchoreoapis.localhost:19080/
+        - key: GITEA__server__DOMAIN
+          value: http-gitea-development-default-e9dbaee7.openchoreoapis.localhost
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: gitea
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: gitea
+  endpoints:
+    http:
+      protocol: HTTP
+      port: 3000
+      visibility: [external]
+  container:
+    image: docker.gitea.com/gitea:28.4-rootless
+    env:
+      - {key: GITEA__database__DB_TYPE, value: sqlite3}
+      - {key: GITEA__security__INSTALL_LOCK, value: "true"}
+      - {key: GITEA__server__DISABLE_SSH, value: "true"}
+      - {key: GITEA__service__DISABLE_REGISTRATION, value: "true"}
+      - {key: GITEA__service__REQUIRE_SIGNIN_VIEW, value: "true"}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: gitea
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  componentType:
+    kind: ClusterComponentType
+    name: deployment/web-application
+  autoDeploy: true
+  traits:
+    - kind: ClusterTrait
+      name: persistent-volume-claim
+      instanceName: data
+      parameters:
+        mountPath: /var/lib/gitea
+    - kind: ClusterTrait
+      name: persistent-volume-claim
+      instanceName: config
+      parameters:
+        mountPath: /etc/gitea

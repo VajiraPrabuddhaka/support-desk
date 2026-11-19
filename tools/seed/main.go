@@ -2,8 +2,9 @@
 //
 //   - Gitea: the geogrid organization, the private support repository, the
 //     support-inbox and triage-bot accounts, the triage labels, and five
-//     customer tickets. It writes triage-bot's API token to
-//     $SECRETS_DIR/triage-bot.token for the support-triage agent.
+//     customer tickets. It writes each bot's API token to
+//     $SECRETS_DIR/<bot>.token: triage-bot's for the support-triage agent, and
+//     support-inbox's for the console.
 //   - Lago: the Growth plan, two add-ons, the LAUNCH20 coupon, and five
 //     customers with subscriptions and invoices.
 //

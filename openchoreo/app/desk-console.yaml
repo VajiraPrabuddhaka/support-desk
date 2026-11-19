@@ -1,0 +1,93 @@
+# The support desk console: a web page to see the tickets, file new ones and
+# triage them while the agents' steps show up live. It reads and files tickets
+# in Gitea as the support-inbox bot, calls support-triage over A2A, and reads
+# the customer's account in Lago.
+#
+# scripts/deploy-console.sh fills in ${CONSOLE_IMAGE}, the image that
+# scripts/push-images.sh builds from the Dockerfile at the root.
+#
+# Order matters: kubectl applies these top to bottom. The ReleaseBinding and the
+# Workload exist before the Component, so autoDeploy finds them.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ReleaseBinding
+metadata:
+  name: desk-console-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: desk-console
+  environment: development
+  workloadOverrides:
+    container:
+      env:
+        # For the "Open in Gitea" and "Open in Lago" links, which the browser
+        # opens through the gateway. See gitea.yaml for how the hostnames are made.
+        - key: GITEA_PUBLIC_URL
+          value: http://http-gitea-development-default-e9dbaee7.openchoreoapis.localhost:19080
+        - key: LAGO_PUBLIC_URL
+          value: http://http-lago-ui-development-default-01c488b9.openchoreoapis.localhost:19080
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: desk-console
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: desk-console
+  endpoints:
+    http:
+      protocol: HTTP
+      port: 8080
+      visibility: [external]
+  dependencies:
+    endpoints:
+      - project: support-desk
+        component: gitea
+        name: http
+        visibility: project
+        envBindings:
+          address: GITEA_URL
+      # lago-api's endpoint carries basePath /api/v1, so this is the REST API's base URL.
+      - project: support-desk
+        component: lago-api
+        name: http
+        visibility: project
+        envBindings:
+          address: LAGO_API_URL
+  container:
+    image: ${CONSOLE_IMAGE}
+    command: [console]
+    env:
+      - {key: LISTEN_ADDR, value: ":8080"}
+      - {key: SUPPORT_REPO, value: geogrid/support}
+      # A Component cannot declare a dependency on an Agent yet (a connection
+      # names a component, not an agent), so the console reaches support-triage
+      # by its Service name in the project's namespace.
+      - {key: TRIAGE_AGENT_URL, value: "http://support-triage:8001"}
+      - {key: GITEA_TOKEN_FILE, value: /var/run/secrets/gitea/token}
+      # Only read with: the console shows the account, it changes nothing.
+      - key: LAGO_API_KEY
+        valueFrom:
+          secretKeyRef: {name: support-desk-lago, key: apiKey}
+    files:
+      # support-inbox's Gitea token, written to OpenBao by scripts/bootstrap.sh.
+      - key: token
+        mountPath: /var/run/secrets/gitea
+        valueFrom:
+          secretKeyRef: {name: support-desk-support-inbox, key: token}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: desk-console
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  componentType:
+    kind: ClusterComponentType
+    name: deployment/web-application
+  autoDeploy: true

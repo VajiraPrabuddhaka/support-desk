@@ -1,0 +1,82 @@
+# support-triage: triages GeoGrid's support tickets in Gitea through gitea-mcp,
+# and asks billing-agent about billing tickets over A2A.
+#
+# OpenChoreo builds it from this repository: a WorkflowRun of dockerfile-builder
+# builds agents/support-triage/Dockerfile, and writes the Agent's Workload from
+# agents/support-triage/workload.yaml. scripts/deploy-agents.sh starts that run
+# and fills in the ${...} values.
+#
+# Order matters: kubectl applies these top to bottom. The AgentReleaseBinding
+# exists before the Agent, so autoDeploy points it at the first release.
+apiVersion: openchoreo.dev/v1alpha1
+kind: AgentReleaseBinding
+metadata:
+  name: support-triage-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    agentName: support-triage
+  environment: development
+  workloadOverrides:
+    container:
+      env:
+        # The model is a choice of the environment, not of the build.
+        - {key: OPENROUTER_MODEL, value: "${OPENROUTER_MODEL}"}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Agent
+metadata:
+  name: support-triage
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  agentType:
+    kind: AgentType
+    name: support-desk-agent
+  autoDeploy: true
+
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: ${SOURCE_REPO}
+        revision:
+          branch: ${SOURCE_BRANCH}
+        appPath: /agents/support-triage
+      docker:
+        context: /
+        filePath: /agents/support-triage/Dockerfile
+
+  # The system prompt is the file prompt.md of the Workload that the build
+  # writes. The release freezes its text, and the AgentType hands it to the agent.
+  systemPrompt:
+    valueFrom:
+      workloadFile: prompt.md
+
+  tools:
+    mcp:
+      - project: support-desk
+        component: gitea-mcp
+        name: mcp
+        visibility: project
+        envBindings:
+          address: GITEA_MCP_URL
+        tools: [list_issues, issue_read, issue_write, search_issues, label_read]
+    a2a:
+      - project: support-desk
+        agent: billing-agent
+        name: a2a
+        visibility: project
+        envBindings:
+          address: BILLING_AGENT_URL
+
+  # The triage rubric: labels, priorities and the note format. It is pinned by
+  # digest in each release and mounted at /skills/triage-rubric.
+  workspace:
+    skills:
+      - name: triage-rubric
+        source:
+          oci: ${TRIAGE_RUBRIC_SKILL}

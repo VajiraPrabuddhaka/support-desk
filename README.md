@@ -4,10 +4,15 @@ This repository shows how two agents written in Go work together over A2A, while
 
 Nothing is mocked. Gitea and Lago run locally in Docker with their official MCP servers, and the agents change real tickets and real invoices. Only the model calls leave your machine, to OpenRouter.
 
+A small web console comes with it. You can see the tickets, file new ones and triage a ticket with one click, while each step of the agents' work shows up as it happens.
+
+The same support desk also runs on OpenChoreo, with the agents as OpenChoreo Agents that OpenChoreo builds from this repository. See [openchoreo/README.md](openchoreo/README.md).
+
 ## Table of Contents
 
 - [The Story](#the-story)
 - [Architecture](#architecture)
+- [Prompts and Skills](#prompts-and-skills)
 - [Scenarios](#scenarios)
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
@@ -33,27 +38,35 @@ Customer emails and web forms end up as issues in the private `geogrid/support` 
 ## Architecture
 
 ```
- you ── make triage T=1 ──A2A──▶ support-triage :8001 ──MCP──▶ gitea-mcp :8091 ──▶ Gitea :3001
-                                      │                          (issues, labels, comments)
-                                      │ A2A (billing_agent tool)
-                                      ▼
-                                 billing-agent :8002 ──MCP──▶ lago-mcp :8092 ──▶ Lago API :3000
-                                                              (customers, invoices, coupons)
+ console :3030 ──┐
+                 ├──A2A──▶ support-triage :8001 ──MCP──▶ gitea-mcp :8091 ──▶ Gitea :3001
+ make triage ────┘              │                        (issues, labels, comments)
+                                │ A2A (billing_agent tool)
+                                ▼
+                           billing-agent :8002 ──MCP──▶ lago-mcp :8092 ──▶ Lago API :3000
+                                                        (customers, invoices, coupons)
  both agents ──▶ OpenRouter
+ console ──▶ Gitea (lists and files tickets) and the Lago API (reads accounts)
 ```
 
 Both agents are built with [ADK Go](https://github.com/google/adk-go) v2. The model is reached through OpenRouter's OpenAI-compatible API (`model/openaimodel`), MCP tools come from `tool/mcptoolset`, and each agent is served over A2A with `server/adka2a`. support-triage calls billing-agent through `agent/remoteagent`, wrapped as a tool with `tool/agenttool`. This keeps support-triage in charge of the ticket, as billing-agent only answers.
 
 **How credentials flow:**
 
-- **support-triage → Gitea** - The agent reads the `triage-bot` user's Gitea token from `/secrets/triage-bot.token` and sends it with every MCP request. gitea-mcp holds no token of its own and passes the agent's token to Gitea, so Gitea decides what the triage bot may do. The token has the `write:issue`, `read:repository` and `read:user` scopes.
-- **billing-agent → Lago** - The agent sends the Lago API key in the `X-Lago-Api-Key` header with every MCP request. lago-mcp holds no key of its own.
+- **support-triage → Gitea** - The agent sends no credentials. gitea-mcp holds the `triage-bot` user's Gitea token, which `seed` writes to `/secrets/triage-bot.token`, and acts as the triage bot, so Gitea decides what the bot may do. The token has the `write:issue`, `read:repository` and `read:user` scopes.
+- **billing-agent → Lago** - The agent sends no credentials. lago-mcp holds the Lago API key and calls Lago with it.
 - **support-triage → billing-agent** - Plain A2A over JSON-RPC, with no authentication yet. See [Next Steps](#next-steps).
+- **console → Gitea** - The console lists and files tickets as the `support-inbox` bot, the same account that opens tickets from customer emails. Its token is in `/secrets/support-inbox.token`, with the same scopes as the triage bot's.
+- **console → Lago** - The console reads the customer's account with the Lago API key. It changes nothing in Lago, as only billing-agent acts on invoices and coupons.
+
+> [!NOTE]
+> The agents carry no credentials of their own for now. This means anything that can reach gitea-mcp or lago-mcp acts with their credentials, the host ports 8091 and 8092 included. lago-mcp also offers such a caller every Lago tool, as the tool allowlist lives in billing-agent.
 
 All host ports are bound to `127.0.0.1`.
 
 | Service | Port | Purpose |
 |---|---|---|
+| `console` | 3030 | Support desk console (web UI) |
 | `support-triage` | 8001 | Triage agent, A2A |
 | `billing-agent` | 8002 | Billing agent, A2A |
 | `gitea` | 3001 | Ticket system (web UI and API) |
@@ -63,11 +76,20 @@ All host ports are bound to `127.0.0.1`.
 | `lago-mcp` | 8092 | Lago MCP server, streamable HTTP at `/mcp` |
 | `seed` | - | Creates the scenarios below, then exits |
 
+## Prompts and Skills
+
+Each agent's instructions are in two parts:
+
+- **System prompt** - `agents/<name>/prompt.md` holds the agent's role and its steps.
+- **Skills** - `agents/<name>/skills/<skill>/SKILL.md` holds the rules, in the [Agent Skills](https://agentskills.io) format. support-triage has `triage-rubric` (labels, priorities and the note format), and billing-agent has `billing-policy` (who may be told what, and the only changes allowed).
+
+At startup the agent reads its prompt from `AGENT_SYSTEM_PROMPT_FILE` and its skills from `AGENT_SKILLS_DIR` when these are set, and adds every skill to its instructions, so the rules apply to every request. OpenChoreo mounts both: the prompt from the workload file that the Agent's `spec.systemPrompt` names, and the skills as pinned images. Without them, as in Docker Compose, the agent uses the copies built into its binary.
+
 ---
 
 ## Scenarios
 
-The `seed` service creates five customers in Lago and one ticket for each in Gitea. Running it again creates nothing twice.
+The `seed` service creates five customers in Lago and one ticket for each in Gitea. Running it again creates nothing twice. The one exception is the duplicate invoice of scenario 1: once billing-agent voids it, the next seed run creates a new one, so the scenario can be played again.
 
 | # | Ticket | Expected triage | What billing-agent should do |
 |---|---|---|---|
@@ -128,9 +150,20 @@ make ps
 docker compose logs -f seed
 ```
 
-### Step 3: Triage the Tickets
+### Step 3: Triage Tickets in the Console
 
-Triage one ticket:
+Open the console at http://localhost:3030. It has the following parts:
+
+- **Ticket queue** - Every ticket in `geogrid/support`, newest first, with filters for new, triaged and needs-info tickets.
+- **Ticket** - The customer's message, the labels and the triage note. **Triage with AI** asks support-triage to triage the ticket, and **Redo triage** asks it to look at a triaged ticket again.
+- **Agent activity** - Each step of the triage as it happens: support-triage reading the ticket, its request to billing-agent and billing-agent's answer, the labels it set and the note it wrote.
+- **Account** - The customer's invoices and coupons in Lago. The panel refreshes when a triage ends, so you can see a duplicate invoice turn voided or a coupon show up.
+
+**New request** files a ticket the way a customer would through the web form, and **Fill an example** fills in one of three requests that match the customers in Lago.
+
+The console calls support-triage over A2A, the same way as any other client. It asks for every step of the agent's work as a separate A2A artifact, so it can show each step while the agent is still working.
+
+You can also triage from the terminal. Triage one ticket:
 
 ```bash
 make triage T=1
@@ -149,6 +182,8 @@ make logs
 ```
 
 ### Step 4: Check the Results
+
+The console shows the labels and the triage note on each ticket, and the account panel shows what billing-agent changed. You can also check the results in Gitea and Lago:
 
 - **Gitea** - Open http://localhost:3001/geogrid/support/issues and sign in with `GITEA_ADMIN_USER` and `GITEA_ADMIN_PASSWORD` from `.env`. Each triaged ticket has labels and a triage note from `triage-bot`.
 - **Lago** - Open http://localhost:3080 and sign in with `LAGO_ADMIN_EMAIL` and `LAGO_ADMIN_PASSWORD`. For scenario 1, one of Bluefin Logistics' two onboarding invoices is voided. For scenario 3, Orbit Health has LAUNCH20 applied.
@@ -198,34 +233,39 @@ This is useful when you change the agent code. Keep Gitea, Lago and the MCP serv
    docker compose stop support-triage billing-agent
    ```
 
-2. Seed from the host, so the triage bot's token is written to `.secrets/triage-bot.token`:
-
-   ```bash
-   set -a; source .env; set +a
-   go run ./tools/seed
-   ```
-
-3. Start billing-agent in one terminal:
+2. Start billing-agent in one terminal:
 
    ```bash
    set -a; source .env; set +a
    go run ./agents/billing-agent
    ```
 
-4. Start support-triage in another terminal:
+3. Start support-triage in another terminal:
 
    ```bash
    set -a; source .env; set +a
    go run ./agents/support-triage
    ```
 
-5. Triage a ticket:
+4. Triage a ticket:
 
    ```bash
    go run ./tools/ask "Triage ticket #1."
    ```
 
-The defaults of every agent setting point to the local ports, so nothing else needs to be set.
+The defaults of every agent setting point to the local ports, and the agents need no Gitea or Lago credentials, so nothing else needs to be set.
+
+The console works the same way. The console container cannot reach agents that run on the host, so stop it with `docker compose stop console`. The console needs the support-inbox bot's token, so copy it out of the volume that `seed` wrote it to, then start the console and open http://localhost:8080:
+
+```bash
+mkdir -p .secrets
+docker compose cp seed:/secrets/support-inbox.token .secrets/
+set -a; source .env; set +a
+go run ./console
+```
+
+> [!NOTE]
+> Do not run `tools/seed` from the host while compose is up. The seed replaces a bot's token when it cannot use the one in its own folder, which leaves gitea-mcp and the console container with tokens that Gitea no longer accepts.
 
 ---
 
@@ -236,10 +276,10 @@ The agents act on real data, so each one has limits beyond its prompt:
 - **Tool allowlists** - Each agent exposes only some of its MCP server's tools to the model. support-triage gets `list_issues`, `issue_read`, `issue_write`, `search_issues` and `label_read`, and gitea-mcp also runs with the same list (`GITEA_TOOLS`). billing-agent gets the read tools of Lago plus two write tools: `void_invoice` and `apply_coupon`. It cannot create or delete customers, invoices, subscriptions, credit notes or coupons.
 - **Write methods** - `issue_write` can also create, edit and close issues and delete comments. support-triage refuses every method except `add_labels` and `add_comment` before the call reaches Gitea, and refuses calls to any other repository (`guardTools` in `agents/support-triage/main.go`).
 - **Gitea permissions** - The triage bot is a collaborator on the support repository only, and its token cannot touch anything outside issues.
-- **Billing policy** - The billing rules are in `agents/billing-agent/prompt.md`: verify the requester's email first, void only a clear, unpaid duplicate up to 1,000 USD, apply only LAUNCH20 and only within 30 days of signing up, and hand everything else to a person.
+- **Billing policy** - The billing rules are in the `billing-policy` skill (`agents/billing-agent/skills/billing-policy/SKILL.md`): verify the requester's email first, void only a clear, unpaid duplicate up to 1,000 USD, apply only LAUNCH20 and only within 30 days of signing up, and hand everything else to a person.
 
 > [!IMPORTANT]
-> The billing limits live only in the prompt. Lago would void any unpaid invoice if the model asked it to, so the limits depend on the model following its instructions. This is a good place to test how well a model sticks to a policy, and a reason to move such limits into code or into the callee later.
+> The billing limits live only in the agent's instructions. Lago would void any unpaid invoice if the model asked it to, so the limits depend on the model following its instructions. This is a good place to test how well a model sticks to a policy, and a reason to move such limits into code or into the callee later.
 
 ---
 
@@ -257,10 +297,24 @@ All settings come from `.env`. The agents read the following variables:
 | `LISTEN_ADDR` / `PUBLIC_URL` | both | `:8001`, `:8002` | Listen address, and the base URL written into the agent card |
 | `SUPPORT_REPO` | triage | `geogrid/support` | The Gitea repository with the tickets |
 | `GITEA_MCP_URL` | triage | `http://localhost:8091/mcp` | Gitea MCP server |
-| `GITEA_TOKEN_FILE` | triage | `.secrets/triage-bot.token` | The triage bot's token, read on every request |
 | `BILLING_AGENT_URL` | triage | `http://localhost:8002` | Where to find billing-agent's agent card |
 | `LAGO_MCP_URL` | billing | `http://localhost:8092/mcp` | Lago MCP server |
-| `LAGO_API_KEY` | billing | (required) | Lago API key, sent with every MCP request |
+
+The agents need no Gitea or Lago credentials. gitea-mcp reads the triage bot's token from the file in `GITEA_ACCESS_TOKEN_FILE`, and lago-mcp reads `LAGO_API_KEY`.
+
+The console reads the following variables. Compose sets all of them, and `CONSOLE_PORT` in `.env` picks the host port (3030 by default).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LISTEN_ADDR` | `:8080` | Listen address |
+| `SUPPORT_REPO` | `geogrid/support` | The Gitea repository with the tickets |
+| `GITEA_URL` | `http://localhost:3001` | Gitea, as the console reaches it |
+| `GITEA_PUBLIC_URL` | (none) | Gitea, as your browser reaches it, for the "Open in Gitea" links. Needed when `GITEA_URL` is an address the browser cannot open, such as `http://gitea:3000`. |
+| `GITEA_TOKEN_FILE` | `.secrets/support-inbox.token` | The support-inbox bot's token, read on every request |
+| `TRIAGE_AGENT_URL` | `http://localhost:8001` | Where to find support-triage's agent card |
+| `LAGO_API_URL` | `http://localhost:3000/api/v1` | Lago's REST API |
+| `LAGO_API_KEY` | (none) | Lago API key. Without it, the account panel stays empty. |
+| `LAGO_PUBLIC_URL` | (none) | The Lago UI, as your browser reaches it, for the "Open in Lago" links |
 
 ---
 
@@ -272,7 +326,11 @@ OpenRouter checks, before each call, that the account can pay for the prompt plu
 
 **A ticket was triaged badly or partly:**
 
-The triage agent skips tickets that already have a status label or its triage note. To try again with fresh data, run `make reset` and `make up`. This takes about a minute once the images are built.
+The triage agent skips tickets that already have a status label or its triage note. In the console, **Redo triage** asks it to triage such a ticket again. To try again with fresh data, run `make reset` and `make up`. This takes about a minute once the images are built.
+
+**The console shows `support-triage · offline`:**
+
+The console checks support-triage's agent card every 15 seconds. Right after `make up`, the agent may still be starting. If it stays offline, check the agent with `make logs`.
 
 **`agent card ... uses plain http`:**
 
@@ -285,24 +343,31 @@ support-triage accepts plain http to billing-agent only when `A2A_ALLOW_HTTP=tru
 ```
 .
 ├── agents/
-│   ├── support-triage/     main.go and prompt.md
-│   └── billing-agent/      main.go and prompt.md
-├── internal/agentkit/      shared code: model, MCP connection, A2A server, tool logging
+│   ├── support-triage/     main.go, prompt.md, skills/triage-rubric, Dockerfile, workload.yaml
+│   └── billing-agent/      main.go, prompt.md, skills/billing-policy, Dockerfile, workload.yaml
+├── console/                the support desk console: a Go server and its web page
+├── internal/
+│   ├── agentkit/           shared code: model, instructions, MCP, A2A server, tool logging
+│   └── tickets/            the ticket format that the seed and the console share
 ├── tools/
 │   ├── seed/               creates the scenarios in Gitea and Lago
 │   └── ask/                a small A2A client
+├── openchoreo/             the OpenChoreo deployment (see openchoreo/README.md)
 ├── infra/gitea/            creates the Gitea admin account
 ├── scripts/init-env.sh     creates .env with generated secrets
-├── compose.yaml            agents, MCP servers, Gitea and Lago
-├── Dockerfile              one image with the four Go binaries
+├── compose.yaml            agents, console, MCP servers, Gitea and Lago
+├── Dockerfile              one image with the five Go binaries
 └── Makefile
 ```
+
+Each agent's own `Dockerfile` and `workload.yaml` are for OpenChoreo, which builds the agent from them. Docker Compose uses the `Dockerfile` at the root.
 
 ---
 
 ## Next Steps
 
+- **Give the agents an identity** - The agents carry no credentials today, and the MCP servers act with their own for any caller. A first step is to have each agent prove who it is to the MCP servers, so every call can be traced to the agent that made it and limited to what that agent may do.
 - **Authenticate the A2A call** - billing-agent accepts any caller today. A first step is to have support-triage present its own identity and have billing-agent check it.
-- **Act on behalf of the person** - Today support-triage acts as `triage-bot` and billing-agent acts as the whole Lago organization. Passing along who asked for the triage would let each system record and limit actions per person.
+- **Act on behalf of the person** - Today gitea-mcp acts as `triage-bot` and lago-mcp acts as the whole Lago organization, whichever agent calls them. Passing along who asked for the triage would let each system record and limit actions per person.
 - **Move limits out of the prompt** - The 1,000 USD limit and the duplicate check could be enforced in billing-agent's code, in a proxy in front of lago-mcp, or by a Lago API key with fewer permissions.
 - **Trigger triage automatically** - A Gitea webhook on new issues could call support-triage, so tickets are triaged as they arrive.

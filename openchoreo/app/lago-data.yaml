@@ -1,0 +1,59 @@
+# Lago's PostgreSQL database and its Redis (Valkey) store, as OpenChoreo Resources.
+#
+# A Resource has no autoDeploy: scripts/deploy-app.sh points each binding at the
+# Resource's latest release once it exists.
+apiVersion: openchoreo.dev/v1alpha1
+kind: Resource
+metadata:
+  name: lago-db
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  type:
+    kind: ResourceType
+    name: postgres-partman
+  parameters:
+    database: lago
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: ResourceReleaseBinding
+metadata:
+  name: lago-db-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    resourceName: lago-db
+  environment: development
+  retainPolicy: Delete
+  resourceTypeEnvironmentConfigs:
+    memory: 512Mi
+    persistenceEnabled: true
+    storageSize: 2Gi
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Resource
+metadata:
+  name: lago-redis
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  type:
+    kind: ClusterResourceType
+    name: valkey
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: ResourceReleaseBinding
+metadata:
+  name: lago-redis-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    resourceName: lago-redis
+  environment: development
+  retainPolicy: Delete
+  resourceTypeEnvironmentConfigs:
+    memory: 128Mi

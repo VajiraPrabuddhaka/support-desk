@@ -1,0 +1,31 @@
+# The support-desk project and its development binding. Every component, resource
+# and agent of the support desk belongs to it.
+apiVersion: openchoreo.dev/v1alpha1
+kind: Project
+metadata:
+  name: support-desk
+  namespace: default
+  labels:
+    openchoreo.dev/name: support-desk
+  annotations:
+    openchoreo.dev/display-name: Support desk
+    openchoreo.dev/description: GeoGrid's support desk - the triage and billing agents, Gitea and Lago
+spec:
+  deploymentPipelineRef:
+    name: default
+  type:
+    kind: ClusterProjectType
+    name: default
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: ProjectReleaseBinding
+metadata:
+  name: support-desk-development
+  namespace: default
+  labels:
+    openchoreo.dev/project: support-desk
+    openchoreo.dev/environment: development
+spec:
+  owner:
+    projectName: support-desk
+  environment: development

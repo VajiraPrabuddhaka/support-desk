@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoGrid Support Desk</title>
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%233b4bd8'/%3E%3Cpath d='M11 6v20M21 6v20M6 11h20M6 21h20' stroke='%23fff' stroke-opacity='.45' stroke-width='1.6'/%3E%3Ccircle cx='21' cy='11' r='3.6' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="9" class="logo-bg"/>
+        <path d="M11 6v20M21 6v20M6 11h20M6 21h20" stroke="#fff" stroke-opacity=".45" stroke-width="1.6"/>
+        <circle cx="21" cy="11" r="3.6" fill="#fff"/>
+      </svg>
+      <div>
+        <div class="brand-name">GeoGrid Support</div>
+        <div class="brand-sub">AI triage desk</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="agent-pill" id="agentPill" title="support-triage">
+        <span class="dot"></span><span id="agentText">Connecting…</span>
+      </span>
+      <button class="btn btn-primary" id="newRequestBtn" type="button">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        New request
+      </button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel queue" aria-label="Tickets">
+      <div class="panel-head">
+        <h2>Tickets</h2>
+        <button class="icon-btn" id="refreshBtn" type="button" title="Refresh" aria-label="Refresh">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="filters" id="filters" role="tablist">
+        <button type="button" data-filter="all" class="active">All <span></span></button>
+        <button type="button" data-filter="new">New <span></span></button>
+        <button type="button" data-filter="triaged">Triaged <span></span></button>
+        <button type="button" data-filter="needs-info">Needs info <span></span></button>
+      </div>
+      <ul class="ticket-list" id="ticketList"></ul>
+    </aside>
+
+    <section class="panel detail" id="detail" aria-live="polite">
+      <div class="empty">
+        <div class="empty-mark">◎</div>
+        <p>Select a ticket to read it and triage it.</p>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="panel activity" id="activity" aria-live="polite"></section>
+      <section class="panel account" id="account"></section>
+    </aside>
+  </main>
+
+  <dialog id="newRequestDialog" class="dialog">
+    <form id="newRequestForm" method="dialog">
+      <header class="dialog-head">
+        <div>
+          <h2>New support request</h2>
+          <p>Filed as the customer would through the web form. It lands in the queue as a new ticket.</p>
+        </div>
+        <button class="icon-btn" type="button" data-close aria-label="Close">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="form-grid">
+        <label>Company<input name="company" autocomplete="organization" placeholder="Bluefin Logistics"></label>
+        <label>Account ID<input name="accountId" placeholder="ACC-1042" spellcheck="false"></label>
+        <label>Your name<input name="name" autocomplete="name" placeholder="Dana Whitfield"></label>
+        <label>Email<input name="email" type="email" required autocomplete="email" placeholder="billing@bluefin.example.com"></label>
+        <label class="span-2">Subject<input name="subject" required placeholder="What do you need help with?"></label>
+        <label class="span-2">Message<textarea name="message" rows="7" required placeholder="Tell us what happened…"></textarea></label>
+      </div>
+      <footer class="dialog-foot">
+        <button class="btn btn-ghost" type="button" id="exampleBtn">Fill an example</button>
+        <span class="spacer"></span>
+        <button class="btn btn-secondary" type="button" data-close>Cancel</button>
+        <button class="btn btn-primary" type="submit" id="submitRequestBtn">Submit request</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

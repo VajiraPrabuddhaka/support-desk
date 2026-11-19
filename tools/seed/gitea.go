@@ -15,14 +15,21 @@ import (
 )
 
 const (
-	inboxUser      = "support-inbox"
-	triageUser     = "triage-bot"
-	triageTokenFor = "support-triage-agent"
+	inboxUser  = "support-inbox"
+	triageUser = "triage-bot"
 )
 
-// triageScopes is what the triage bot's token may do: read and write issues
-// (labels and comments are part of issues), and read the repository.
-var triageScopes = []string{"write:issue", "read:repository", "read:user"}
+// botTokens are the API tokens the seed writes to <secretsDir>/<user>.token:
+// triage-bot's for the support-triage agent, and support-inbox's for the
+// console, which lists tickets and files new ones as the inbox. Both may read
+// and write issues (labels and comments are part of issues) and read the
+// repository.
+var botTokens = []struct{ user, name string }{
+	{triageUser, "support-triage-agent"},
+	{inboxUser, "support-desk-console"},
+}
+
+var tokenScopes = []string{"write:issue", "read:repository", "read:user"}
 
 type giteaSeeder struct {
 	url        string
@@ -70,7 +77,7 @@ func (g *giteaSeeder) run(ctx context.Context) error {
 		{"repository", g.ensureRepo},
 		{"bot users", g.ensureUsers},
 		{"labels", g.ensureLabels},
-		{"triage bot token", g.ensureTriageToken},
+		{"bot tokens", g.ensureTokens},
 		{"tickets", g.ensureTickets},
 	}
 	for _, s := range steps {
@@ -161,31 +168,39 @@ func (g *giteaSeeder) ensureLabels(ctx context.Context) error {
 	return nil
 }
 
-// ensureTriageToken writes a working token for triage-bot to
-// <secretsDir>/triage-bot.token. A token already in the file is kept if Gitea
-// still accepts it as triage-bot.
-func (g *giteaSeeder) ensureTriageToken(ctx context.Context) error {
-	path := filepath.Join(g.secretsDir, triageUser+".token")
+func (g *giteaSeeder) ensureTokens(ctx context.Context) error {
+	for _, t := range botTokens {
+		if err := g.ensureToken(ctx, t.user, t.name); err != nil {
+			return fmt.Errorf("%s: %w", t.user, err)
+		}
+	}
+	return nil
+}
+
+// ensureToken writes a working token for user to <secretsDir>/<user>.token. A
+// token already in the file is kept if Gitea still accepts it as that user.
+func (g *giteaSeeder) ensureToken(ctx context.Context, user, tokenName string) error {
+	path := filepath.Join(g.secretsDir, user+".token")
 	if raw, err := os.ReadFile(path); err == nil {
 		token := strings.TrimSpace(string(raw))
 		var me struct {
 			Login string `json:"login"`
 		}
 		if token != "" && newAPIClient(g.url, tokenAuth(token)).do(ctx, http.MethodGet, "/api/v1/user", nil, &me) == nil &&
-			me.Login == triageUser {
-			slog.Info("gitea: triage bot token is still valid", "file", path)
+			me.Login == user {
+			slog.Info("gitea: token is still valid", "user", user, "file", path)
 			return nil
 		}
 	}
 
 	// Gitea creates tokens only for a user who signs in with a password, so
 	// give the bot a fresh random one. It is not stored anywhere.
-	bot, err := g.botClient(ctx, triageUser)
+	bot, err := g.botClient(ctx, user)
 	if err != nil {
 		return err
 	}
-	tokenPath := "/api/v1/users/" + triageUser + "/tokens"
-	if err := bot.do(ctx, http.MethodDelete, tokenPath+"/"+url.PathEscape(triageTokenFor), nil, nil); err != nil &&
+	tokenPath := "/api/v1/users/" + user + "/tokens"
+	if err := bot.do(ctx, http.MethodDelete, tokenPath+"/"+url.PathEscape(tokenName), nil, nil); err != nil &&
 		!isStatus(err, http.StatusNotFound) {
 		return fmt.Errorf("delete old token: %w", err)
 	}
@@ -193,7 +208,7 @@ func (g *giteaSeeder) ensureTriageToken(ctx context.Context) error {
 		SHA1 string `json:"sha1"`
 	}
 	if err := bot.do(ctx, http.MethodPost, tokenPath, map[string]any{
-		"name": triageTokenFor, "scopes": triageScopes,
+		"name": tokenName, "scopes": tokenScopes,
 	}, &created); err != nil {
 		return fmt.Errorf("create token: %w", err)
 	}
@@ -206,12 +221,13 @@ func (g *giteaSeeder) ensureTriageToken(ctx context.Context) error {
 	if err := os.WriteFile(path, []byte(created.SHA1+"\n"), 0o600); err != nil {
 		return err
 	}
-	slog.Info("gitea: wrote triage bot token", "file", path, "scopes", strings.Join(triageScopes, ","))
+	slog.Info("gitea: wrote token", "user", user, "file", path, "scopes", strings.Join(tokenScopes, ","))
 	return nil
 }
 
 // ensureTickets opens each scenario ticket as support-inbox, unless an issue
-// with the same title exists.
+// with the same title exists. It uses the token that ensureTokens wrote, the
+// same one the console files tickets with.
 func (g *giteaSeeder) ensureTickets(ctx context.Context) error {
 	var existing []struct {
 		Title string `json:"title"`
@@ -224,22 +240,20 @@ func (g *giteaSeeder) ensureTickets(ctx context.Context) error {
 		have[i.Title] = true
 	}
 
-	var inbox *apiClient
-	for _, t := range tickets {
+	raw, err := os.ReadFile(filepath.Join(g.secretsDir, inboxUser+".token"))
+	if err != nil {
+		return fmt.Errorf("read %s's token: %w", inboxUser, err)
+	}
+	inbox := newAPIClient(g.url, tokenAuth(strings.TrimSpace(string(raw))))
+	for _, t := range scenarioTickets {
 		if have[t.Title] {
 			continue
-		}
-		if inbox == nil {
-			var err error
-			if inbox, err = g.botClient(ctx, inboxUser); err != nil {
-				return err
-			}
 		}
 		var issue struct {
 			Number int `json:"number"`
 		}
 		if err := inbox.do(ctx, http.MethodPost, g.repoPath("/issues"), map[string]any{
-			"title": t.Title, "body": t.body(),
+			"title": t.Title, "body": t.Body(),
 		}, &issue); err != nil {
 			return fmt.Errorf("open ticket %q: %w", t.Title, err)
 		}

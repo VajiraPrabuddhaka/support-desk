@@ -1,0 +1,57 @@
+# Lago's web UI. It runs in the browser and calls lago-api at API_URL, so that is
+# lago-api's external URL.
+# Order matters: kubectl applies these top to bottom. The ReleaseBinding and the
+# Workload exist before the Component, so autoDeploy finds them.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ReleaseBinding
+metadata:
+  name: lago-ui-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: lago-ui
+  environment: development
+  workloadOverrides:
+    container:
+      env:
+        - key: API_URL
+          value: http://http-lago-api-development-default-417fab49.openchoreoapis.localhost:19080
+        - key: LAGO_API_URL
+          value: http://http-lago-api-development-default-417fab49.openchoreoapis.localhost:19080
+        - key: LAGO_FRONT_URL
+          value: http://http-lago-ui-development-default-01c488b9.openchoreoapis.localhost:19080
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: lago-ui
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: lago-ui
+  endpoints:
+    http:
+      protocol: HTTP
+      port: 8080
+      visibility: [external]
+  container:
+    image: getlago/front:v1.57.0
+    env:
+      - {key: APP_ENV, value: production}
+      - {key: LAGO_OAUTH_PROXY_URL, value: https://proxy.getlago.com}
+      - {key: LAGO_DISABLE_PDF_GENERATION, value: "false"}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: lago-ui
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  componentType:
+    kind: ClusterComponentType
+    name: deployment/web-application
+  autoDeploy: true

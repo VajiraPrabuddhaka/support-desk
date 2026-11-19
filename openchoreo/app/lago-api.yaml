@@ -1,0 +1,118 @@
+# The Lago API. It runs Lago's migrations before it starts: they are safe to run
+# on every start, and on the first one they also create the GeoGrid organization
+# and its API key (LAGO_CREATE_ORG).
+#
+# It owns the `storage` volume, where invoice PDFs are kept. lago-worker writes
+# them there too, through the worker-with-shared-volume type.
+# Order matters: kubectl applies these top to bottom. The ReleaseBinding and the
+# Workload exist before the Component, so autoDeploy finds them.
+# LAGO_API_URL and LAGO_FRONT_URL are the external URLs of lago-api and lago-ui,
+# used in links such as invoice PDFs. The hostnames are stable: see gitea.yaml.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ReleaseBinding
+metadata:
+  name: lago-api-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: lago-api
+  environment: development
+  componentTypeEnvironmentConfigs:
+    resources:
+      requests: {cpu: 250m, memory: 768Mi}
+      limits: {cpu: "2", memory: 1536Mi}
+  traitEnvironmentConfigs:
+    storage:
+      size: 2Gi
+  workloadOverrides:
+    container:
+      env:
+        - key: LAGO_API_URL
+          value: http://http-lago-api-development-default-417fab49.openchoreoapis.localhost:19080
+        - key: LAGO_FRONT_URL
+          value: http://http-lago-ui-development-default-01c488b9.openchoreoapis.localhost:19080
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: lago-api
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: lago-api
+  endpoints:
+    # basePath is where Lago's REST API lives; lago-mcp gets this address. The
+    # external route serves the whole server, as the Lago UI needs.
+    http:
+      protocol: HTTP
+      port: 3000
+      basePath: /api/v1
+      visibility: [external]
+  dependencies:
+    resources:
+      - ref: lago-db
+        envBindings:
+          url: DATABASE_URL
+      - ref: lago-redis
+        envBindings:
+          url: REDIS_URL
+    endpoints:
+      - project: support-desk
+        component: lago-pdf
+        name: http
+        visibility: project
+        envBindings:
+          address: LAGO_PDF_URL
+  container:
+    image: getlago/api:v1.57.0
+    command: [/bin/bash, -c, "./scripts/migrate.sh && exec ./scripts/start.api.sh"]
+    env:
+      - {key: RAILS_ENV, value: production}
+      - {key: RAILS_LOG_TO_STDOUT, value: "true"}
+      - {key: LAGO_SIDEKIQ_WEB, value: "false"}
+      - {key: LAGO_USE_AWS_S3, value: "false"}
+      - {key: LAGO_USE_GCS, value: "false"}
+      - {key: LAGO_DATA_API_URL, value: http://data-api}
+      - {key: LAGO_DISABLE_SEGMENT, value: "true"}
+      - {key: LAGO_DISABLE_SIGNUP, value: "true"}
+      - {key: LAGO_DISABLE_PDF_GENERATION, value: "false"}
+      - {key: LAGO_WEBHOOK_ALLOW_PRIVATE_URLS, value: "false"}
+      - {key: LAGO_OAUTH_PROXY_URL, value: https://proxy.getlago.com}
+      - {key: LAGO_CREATE_ORG, value: "true"}
+      - {key: LAGO_ORG_NAME, value: GeoGrid}
+      - {key: LAGO_ORG_USER_EMAIL, value: admin@geogrid.example.com}
+      - key: SECRET_KEY_BASE
+        valueFrom: {secretKeyRef: {name: support-desk-lago, key: secretKeyBase}}
+      - key: LAGO_RSA_PRIVATE_KEY
+        valueFrom: {secretKeyRef: {name: support-desk-lago, key: rsaPrivateKey}}
+      - key: LAGO_ENCRYPTION_PRIMARY_KEY
+        valueFrom: {secretKeyRef: {name: support-desk-lago, key: encryptionPrimaryKey}}
+      - key: LAGO_ENCRYPTION_DETERMINISTIC_KEY
+        valueFrom: {secretKeyRef: {name: support-desk-lago, key: encryptionDeterministicKey}}
+      - key: LAGO_ENCRYPTION_KEY_DERIVATION_SALT
+        valueFrom: {secretKeyRef: {name: support-desk-lago, key: encryptionKeyDerivationSalt}}
+      - key: LAGO_ORG_USER_PASSWORD
+        valueFrom: {secretKeyRef: {name: support-desk-lago, key: adminPassword}}
+      - key: LAGO_ORG_API_KEY
+        valueFrom: {secretKeyRef: {name: support-desk-lago, key: apiKey}}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: lago-api
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  componentType:
+    kind: ClusterComponentType
+    name: deployment/web-application
+  autoDeploy: true
+  traits:
+    - kind: ClusterTrait
+      name: persistent-volume-claim
+      instanceName: storage
+      parameters:
+        mountPath: /app/storage

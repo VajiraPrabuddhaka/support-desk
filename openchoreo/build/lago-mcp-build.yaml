@@ -1,0 +1,24 @@
+# Starts a build of lago-mcp. A WorkflowRun runs once, so give each new build a
+# new name.
+apiVersion: openchoreo.dev/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: lago-mcp-build-01
+  namespace: default
+  labels:
+    openchoreo.dev/project: support-desk
+    openchoreo.dev/component: lago-mcp
+spec:
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: https://github.com/getlago/lago-agent-toolkit
+        revision:
+          branch: main
+          commit: 26bf1c5c7f5565e154b7ebf76bb5f35f1d182711
+        appPath: /mcp
+      docker:
+        context: /mcp
+        filePath: /mcp/Dockerfile

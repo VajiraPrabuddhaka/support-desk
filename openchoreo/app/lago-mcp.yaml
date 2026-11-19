@@ -1,0 +1,77 @@
+# Lago's MCP server, built by OpenChoreo from Lago's own Dockerfile at a fixed
+# commit. The published getlago/lago-mcp-server image is from November 2025,
+# before the coupon, invoice and payment tools were added.
+#
+# It calls Lago with the organization's API key from OpenBao, so billing-agent
+# sends no credentials. Without a key in the request, it uses LAGO_API_KEY and
+# LAGO_API_URL from its environment. It is not exposed outside the project.
+# Order matters: kubectl applies these top to bottom. The Workload exists before
+# the Component, so autoDeploy finds it.
+#
+# The build writes a Workload named <component>-workload. Lago's repository has no
+# workload.yaml, so when no Workload of that name exists, the build creates one with
+# only the image. When it exists, the build replaces only its image. So this
+# Workload has that name, and holds the endpoint, the dependency and the command.
+#
+# ${LAGO_MCP_IMAGE} is the image already in the cluster's Workload, so applying
+# this again keeps the built image. Before the first build it is the published
+# image, as a stand-in (scripts/deploy-app.sh fills it in).
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: lago-mcp-workload
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: lago-mcp
+  endpoints:
+    mcp:
+      protocol: HTTP
+      port: 8080
+      basePath: /mcp
+  dependencies:
+    endpoints:
+      # lago-api's endpoint carries basePath /api/v1, so this address is the
+      # base URL of Lago's REST API.
+      - project: support-desk
+        component: lago-api
+        name: http
+        visibility: project
+        envBindings:
+          address: LAGO_API_URL
+  container:
+    image: ${LAGO_MCP_IMAGE}
+    command: [/app/lago-mcp-server]
+    args: [sse, --host, 0.0.0.0, --port, "8080"]
+    env:
+      - {key: RUST_LOG, value: info}
+      - key: LAGO_API_KEY
+        valueFrom:
+          secretKeyRef: {name: support-desk-lago, key: apiKey}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: lago-mcp
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  componentType:
+    kind: ClusterComponentType
+    name: deployment/service
+  autoDeploy: true
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: https://github.com/getlago/lago-agent-toolkit
+        revision:
+          branch: main
+          commit: 26bf1c5c7f5565e154b7ebf76bb5f35f1d182711
+        appPath: /mcp
+      docker:
+        context: /mcp
+        filePath: /mcp/Dockerfile

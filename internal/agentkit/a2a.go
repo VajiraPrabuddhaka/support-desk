@@ -32,6 +32,10 @@ type ServeConfig struct {
 	PublicURL string
 	// Version is the agent version shown in the agent card.
 	Version string
+	// StreamSteps sends every step of a run to the caller as it happens (one
+	// A2A artifact per ADK event): the model's tool calls, their results and
+	// its text. Without it the caller gets the final answer only.
+	StreamSteps bool
 }
 
 // Serve runs the agent over A2A until ctx is cancelled.
@@ -56,12 +60,17 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 		Capabilities:       a2a.AgentCapabilities{Streaming: true},
 	}
 
+	outputMode := adka2a.OutputArtifactPerRun
+	if cfg.StreamSteps {
+		outputMode = adka2a.OutputArtifactPerEvent
+	}
 	executor := adka2a.NewExecutor(adka2a.ExecutorConfig{
 		RunnerConfig: runner.Config{
 			AppName:        cfg.Agent.Name(),
 			Agent:          cfg.Agent,
 			SessionService: session.InMemoryService(),
 		},
+		OutputMode: outputMode,
 	})
 
 	mux := http.NewServeMux()

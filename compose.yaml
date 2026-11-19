@@ -62,17 +62,14 @@ services:
       TRIAGE_MODEL: ${TRIAGE_MODEL:-}
       MAX_OUTPUT_TOKENS: ${MAX_OUTPUT_TOKENS:-}
       SUPPORT_REPO: ${SUPPORT_REPO:-geogrid/support}
+      # gitea-mcp holds the triage bot's token, so the agent needs none.
       GITEA_MCP_URL: http://gitea-mcp:8080/mcp
-      # Written by seed. The agent sends it to gitea-mcp with every request.
-      GITEA_TOKEN_FILE: /secrets/triage-bot.token
       BILLING_AGENT_URL: http://billing-agent:8002
       # billing-agent is reached over plain http on the private compose
       # network. Without this, only https or localhost is accepted.
       A2A_ALLOW_HTTP: "true"
       LISTEN_ADDR: ":8001"
       PUBLIC_URL: http://support-triage:8001
-    volumes:
-      - agent-secrets:/secrets:ro
     ports:
       - 127.0.0.1:8001:8001
     depends_on:
@@ -92,9 +89,8 @@ services:
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
       BILLING_MODEL: ${BILLING_MODEL:-}
       MAX_OUTPUT_TOKENS: ${MAX_OUTPUT_TOKENS:-}
+      # lago-mcp holds the Lago API key, so the agent needs none.
       LAGO_MCP_URL: http://lago-mcp:8080/mcp
-      # The agent sends this key to lago-mcp with every request.
-      LAGO_API_KEY: ${LAGO_API_KEY:?run make env}
       LISTEN_ADDR: ":8002"
       PUBLIC_URL: http://billing-agent:8002
     ports:
@@ -103,6 +99,33 @@ services:
       seed:
         condition: service_completed_successfully
       lago-mcp:
+        condition: service_started
+    restart: unless-stopped
+
+  # The support desk console: the web page to see tickets, file new ones and
+  # triage them while the agents' steps show up live.
+  console:
+    <<: *agent-image
+    command: ["console"]
+    environment:
+      LISTEN_ADDR: ":8080"
+      SUPPORT_REPO: ${SUPPORT_REPO:-geogrid/support}
+      GITEA_URL: http://gitea:3000
+      GITEA_PUBLIC_URL: http://localhost:${GITEA_PORT:-3001}
+      # Written by seed: the console lists and files tickets as support-inbox.
+      GITEA_TOKEN_FILE: /secrets/support-inbox.token
+      TRIAGE_AGENT_URL: http://support-triage:8001
+      LAGO_API_URL: http://lago-api:3000/api/v1
+      LAGO_API_KEY: ${LAGO_API_KEY:?run make env}
+      LAGO_PUBLIC_URL: http://localhost:${LAGO_UI_PORT:-3080}
+    volumes:
+      - agent-secrets:/secrets:ro
+    ports:
+      - 127.0.0.1:${CONSOLE_PORT:-3030}:8080
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      support-triage:
         condition: service_started
     restart: unless-stopped
 
@@ -139,13 +162,19 @@ services:
     image: docker.gitea.com/gitea-mcp-server:1.13.0
     command: ["/app/gitea-mcp", "-t", "http", "-p", "8080", "-H", "http://gitea:3000"]
     environment:
-      # No token here: each request carries the caller's own token.
+      # gitea-mcp acts as the triage bot in Gitea, with the token that seed
+      # writes. Callers send no credentials.
+      GITEA_ACCESS_TOKEN_FILE: /secrets/triage-bot.token
       GITEA_TOOLS: list_issues,issue_read,issue_write,search_issues,label_read
+    volumes:
+      - agent-secrets:/secrets:ro
     ports:
       - 127.0.0.1:8091:8080
     depends_on:
       gitea:
         condition: service_healthy
+      seed:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   lago-mcp:
@@ -156,7 +185,8 @@ services:
       context: https://github.com/getlago/lago-agent-toolkit.git#26bf1c5c7f5565e154b7ebf76bb5f35f1d182711:mcp
     command: ["sse", "--host", "0.0.0.0", "--port", "8080"]
     environment:
-      # No API key here: each request carries the caller's key in X-Lago-Api-Key.
+      # lago-mcp calls Lago with this key and URL. Callers send no credentials.
+      LAGO_API_KEY: ${LAGO_API_KEY:?run make env}
       LAGO_API_URL: http://lago-api:3000/api/v1
     ports:
       - 127.0.0.1:8092:8080

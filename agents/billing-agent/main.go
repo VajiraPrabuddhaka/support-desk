@@ -5,8 +5,9 @@ package main
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -20,8 +21,15 @@ import (
 	"support-desk/internal/agentkit"
 )
 
+// builtinPrompt and builtinSkills are used when the platform mounts no prompt or
+// skills (AGENT_SYSTEM_PROMPT_FILE, AGENT_SKILLS_DIR), as in Docker Compose. On
+// OpenChoreo the Agent's system prompt and workspace skills take their place.
+//
 //go:embed prompt.md
-var instruction string
+var builtinPrompt string
+
+//go:embed skills
+var builtinSkills embed.FS
 
 // lagoTools are the Lago MCP tools the model may see. Everything else the
 // server offers (creating customers, invoices, plans, credit notes, deleting
@@ -56,18 +64,22 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	// The agent's own Lago API key. Lago's MCP server holds no key: it uses
-	// the one sent with each request in X-Lago-Api-Key.
-	lagoKey, err := agentkit.RequireEnv("LAGO_API_KEY")
-	if err != nil {
-		return err
-	}
+	// Lago's MCP server holds the Lago API key, so the agent sends no
+	// credentials.
 	lagoMCP := agentkit.Env("LAGO_MCP_URL", "http://localhost:8092/mcp")
-	lago, err := agentkit.MCPToolset(lagoMCP, agentkit.StaticHeader("X-Lago-Api-Key", lagoKey), lagoTools)
+	lago, err := agentkit.MCPToolset(lagoMCP, lagoTools)
 	if err != nil {
 		return fmt.Errorf("connect to Lago MCP: %w", err)
 	}
 
+	skills, err := fs.Sub(builtinSkills, "skills")
+	if err != nil {
+		return err
+	}
+	instruction, err := agentkit.LoadInstruction(builtinPrompt, skills)
+	if err != nil {
+		return err
+	}
 	genConfig, err := agentkit.GenerateConfig()
 	if err != nil {
 		return err

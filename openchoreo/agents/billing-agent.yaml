@@ -1,0 +1,100 @@
+# billing-agent: answers billing questions from GeoGrid's tickets, working in Lago
+# through lago-mcp. support-triage calls it over A2A.
+#
+# OpenChoreo builds it from this repository: a WorkflowRun of dockerfile-builder
+# builds agents/billing-agent/Dockerfile, and writes the Agent's Workload from
+# agents/billing-agent/workload.yaml. scripts/deploy-agents.sh starts that run
+# and fills in the ${...} values.
+#
+# Order matters: kubectl applies these top to bottom. The AgentReleaseBinding
+# exists before the Agent, so autoDeploy points it at the first release.
+apiVersion: openchoreo.dev/v1alpha1
+kind: AgentReleaseBinding
+metadata:
+  name: billing-agent-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    agentName: billing-agent
+  environment: development
+  workloadOverrides:
+    container:
+      env:
+        # The model is a choice of the environment, not of the build.
+        - {key: OPENROUTER_MODEL, value: "${OPENROUTER_MODEL}"}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Agent
+metadata:
+  name: billing-agent
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  agentType:
+    kind: AgentType
+    name: support-desk-agent
+  autoDeploy: true
+
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: ${SOURCE_REPO}
+        revision:
+          branch: ${SOURCE_BRANCH}
+        appPath: /agents/billing-agent
+      docker:
+        context: /
+        filePath: /agents/billing-agent/Dockerfile
+
+  # The system prompt is the file prompt.md of the Workload that the build
+  # writes. The release freezes its text, and the AgentType hands it to the agent.
+  systemPrompt:
+    valueFrom:
+      workloadFile: prompt.md
+
+  tools:
+    mcp:
+      - project: support-desk
+        component: lago-mcp
+        name: mcp
+        visibility: project
+        envBindings:
+          address: LAGO_MCP_URL
+        # The tools this agent offers the model; the code keeps the same list.
+        tools:
+          - get_customer
+          - list_customers
+          - get_customer_current_usage
+          - list_invoices
+          - list_customer_invoices
+          - get_invoice
+          - find_invoice_by_number
+          - download_invoice
+          - get_fee
+          - list_payments
+          - list_customer_payments
+          - get_payment
+          - list_credit_notes
+          - get_credit_note
+          - list_coupons
+          - get_coupon
+          - list_applied_coupons
+          - list_subscriptions
+          - list_customer_subscriptions
+          - get_subscription
+          - list_plans
+          - get_plan
+          - void_invoice
+          - apply_coupon
+
+  # The billing policy: who may be told what, and the only changes allowed. It
+  # is pinned by digest in each release and mounted at /skills/billing-policy.
+  workspace:
+    skills:
+      - name: billing-policy
+        source:
+          oci: ${BILLING_POLICY_SKILL}

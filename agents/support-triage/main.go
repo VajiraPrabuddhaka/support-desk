@@ -5,8 +5,9 @@ package main
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -22,8 +23,15 @@ import (
 	"support-desk/internal/agentkit"
 )
 
+// builtinPrompt and builtinSkills are used when the platform mounts no prompt or
+// skills (AGENT_SYSTEM_PROMPT_FILE, AGENT_SKILLS_DIR), as in Docker Compose. On
+// OpenChoreo the Agent's system prompt and workspace skills take their place.
+//
 //go:embed prompt.md
-var promptTemplate string
+var builtinPrompt string
+
+//go:embed skills
+var builtinSkills embed.FS
 
 // giteaTools are the Gitea MCP tools the model may see.
 var giteaTools = []string{"list_issues", "issue_read", "issue_write", "search_issues", "label_read"}
@@ -56,12 +64,10 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("SUPPORT_REPO must look like owner/repo, got %q", repo)
 	}
 
-	// The triage bot's own Gitea token, read from a file on every request.
-	// Gitea's MCP server holds no token: it passes this one to Gitea, so
-	// Gitea checks what the triage bot may do.
-	tokenFile := agentkit.Env("GITEA_TOKEN_FILE", ".secrets/triage-bot.token")
+	// Gitea's MCP server holds the triage bot's token and acts as the bot in
+	// Gitea, so the agent sends no credentials.
 	giteaMCP := agentkit.Env("GITEA_MCP_URL", "http://localhost:8091/mcp")
-	gitea, err := agentkit.MCPToolset(giteaMCP, agentkit.BearerTokenFile(tokenFile), giteaTools)
+	gitea, err := agentkit.MCPToolset(giteaMCP, giteaTools)
 	if err != nil {
 		return fmt.Errorf("connect to Gitea MCP: %w", err)
 	}
@@ -82,7 +88,15 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create billing_agent client: %w", err)
 	}
 
-	instruction := strings.NewReplacer("{{REPO}}", repo, "{{OWNER}}", owner, "{{NAME}}", name).Replace(promptTemplate)
+	skills, err := fs.Sub(builtinSkills, "skills")
+	if err != nil {
+		return err
+	}
+	base, err := agentkit.LoadInstruction(builtinPrompt, skills)
+	if err != nil {
+		return err
+	}
+	instruction := strings.NewReplacer("{{REPO}}", repo, "{{OWNER}}", owner, "{{NAME}}", name).Replace(base)
 	genConfig, err := agentkit.GenerateConfig()
 	if err != nil {
 		return err
@@ -113,6 +127,8 @@ func run(ctx context.Context) error {
 		ListenAddr: agentkit.Env("LISTEN_ADDR", ":8001"),
 		PublicURL:  agentkit.Env("PUBLIC_URL", "http://localhost:8001"),
 		Version:    "1.0.0",
+		// The console shows each step of a triage as it happens.
+		StreamSteps: true,
 	})
 }
 

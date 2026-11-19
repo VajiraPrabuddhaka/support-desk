@@ -152,7 +152,9 @@ func (l *lagoSeeder) ensureCoupon(ctx context.Context) error {
 
 // ensureCustomer creates the customer, its Growth subscription and its
 // one-off invoices, then marks the invoices paid that the scenario says were
-// paid. Nothing is created twice when the seed runs again.
+// paid. Nothing is created twice when the seed runs again. A voided invoice
+// does not count, so after billing-agent voids a duplicate, running the seed
+// again creates a new one and the scenario can be played again.
 func (l *lagoSeeder) ensureCustomer(ctx context.Context, c customer) error {
 	// POST /customers creates or updates.
 	if err := l.api.do(ctx, http.MethodPost, "/api/v1/customers", map[string]any{

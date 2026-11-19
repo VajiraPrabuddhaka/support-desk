@@ -1,0 +1,56 @@
+# Gitea's MCP server. It acts as the triage bot in Gitea, with the bot's token
+# from OpenBao, so the agents that call it send no credentials. It is not
+# exposed outside the project.
+#
+# The token exists once scripts/bootstrap.sh has run, so on a fresh install the
+# pod waits for its secret until then.
+# Order matters: kubectl applies these top to bottom. The Workload exists before
+# the Component, so autoDeploy finds it.
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: gitea-mcp
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: gitea-mcp
+  endpoints:
+    mcp:
+      protocol: HTTP
+      port: 8080
+      basePath: /mcp
+  dependencies:
+    endpoints:
+      - project: support-desk
+        component: gitea
+        name: http
+        visibility: project
+        envBindings:
+          address: GITEA_HOST
+  container:
+    image: docker.gitea.com/gitea-mcp-server:1.13.0
+    command: [/app/gitea-mcp]
+    args: [-t, http, -p, "8080"]
+    env:
+      - key: GITEA_TOOLS
+        value: list_issues,issue_read,issue_write,search_issues,label_read
+      - {key: GITEA_ACCESS_TOKEN_FILE, value: /var/run/secrets/gitea/token}
+    files:
+      - key: token
+        mountPath: /var/run/secrets/gitea
+        valueFrom:
+          secretKeyRef: {name: support-desk-triage-bot, key: token}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: gitea-mcp
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  componentType:
+    kind: ClusterComponentType
+    name: deployment/service
+  autoDeploy: true

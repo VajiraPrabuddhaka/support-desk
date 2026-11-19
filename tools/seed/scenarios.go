@@ -1,6 +1,6 @@
 package main
 
-import "fmt"
+import "support-desk/internal/tickets"
 
 // The company in this sample is GeoGrid, which sells a geocoding API. Its
 // customers subscribe to the Growth plan (199.00 USD a month, paid in
@@ -68,23 +68,8 @@ var customers = []customer{
 	},
 }
 
-type ticket struct {
-	Title                        string
-	FromName, FromEmail, Company string
-	AccountID, Channel, Message  string
-}
-
-// body renders a ticket the way the support inbox files it.
-func (t ticket) body() string {
-	from := t.FromEmail
-	if t.FromName != "" {
-		from = fmt.Sprintf("%s <%s>", t.FromName, t.FromEmail)
-	}
-	return fmt.Sprintf("**From:** %s\n**Company:** %s\n**Account ID:** %s\n**Channel:** %s\n\n---\n\n%s\n",
-		from, t.Company, t.AccountID, t.Channel, t.Message)
-}
-
-var tickets = []ticket{
+// scenarioTickets are the tickets the support inbox opens, one per scenario.
+var scenarioTickets = []tickets.Ticket{
 	{
 		Title:    "Invoiced twice for the onboarding package",
 		FromName: "Dana Whitfield", FromEmail: "billing@bluefin.example.com",

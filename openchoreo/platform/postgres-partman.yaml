@@ -1,0 +1,261 @@
+# ResourceType for a PostgreSQL database with the pg_partman extension, which Lago
+# needs. It is the shipped `postgres` ClusterResourceType with three changes:
+#
+# - The image is Lago's getlago/postgres-partman:15.0-alpine, which ships
+#   pg_partman. The shipped type runs postgres:16-alpine, which does not.
+# - The application user is a superuser. Lago's migrations install pg_partman,
+#   and only a superuser can install it. Lago's own docker-compose does the same.
+# - The demo user and the Adminer console are left out.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ResourceType
+metadata:
+  name: postgres-partman
+  namespace: default
+  annotations:
+    openchoreo.dev/description: "PostgreSQL 15 with pg_partman, for Lago"
+spec:
+  retainPolicy: Delete
+  parameters:
+    openAPIV3Schema:
+      type: object
+      properties:
+        database:
+          type: string
+          default: appdb
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        memory:
+          type: string
+          default: 512Mi
+        persistenceEnabled:
+          type: boolean
+          default: true
+          description: Keep the data in a PVC, so it survives pod restarts.
+        storageClassName:
+          type: string
+          default: ""
+          description: Only used when persistenceEnabled is true. Empty uses the default StorageClass.
+        storageSize:
+          type: string
+          default: 2Gi
+  outputs:
+    - name: host
+      value: ${metadata.name}.${metadata.namespace}.svc.cluster.local
+    - name: port
+      value: "5432"
+    - name: database
+      configMapKeyRef:
+        name: ${metadata.name}-config
+        key: database
+    - name: username
+      configMapKeyRef:
+        name: ${metadata.name}-config
+        key: username
+    - name: password
+      secretKeyRef:
+        name: ${metadata.name}-creds
+        key: password
+    - name: url
+      secretKeyRef:
+        name: ${metadata.name}-creds
+        key: url
+  resources:
+    - id: config
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${metadata.name}-config
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        data:
+          database: ${parameters.database}
+          username: ${metadata.resourceName}-user
+    - id: init-scripts
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${metadata.name}-init
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        data:
+          01-create-app-user.sh: |
+            #!/bin/bash
+            set -e
+            psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<EOSQL
+              CREATE USER "$APPUSER" WITH SUPERUSER PASSWORD '$APPUSER_PASSWORD';
+              ALTER DATABASE "$POSTGRES_DB" OWNER TO "$APPUSER";
+            EOSQL
+    - id: password-gen-postgres
+      template:
+        apiVersion: generators.external-secrets.io/v1alpha1
+        kind: Password
+        metadata:
+          name: ${metadata.name}-creds-postgres
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          length: 32
+          digits: 8
+          symbols: 0
+          noUpper: false
+          allowRepeat: true
+    - id: creds-postgres
+      template:
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata:
+          name: ${metadata.name}-creds-postgres
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          refreshInterval: "0"
+          dataFrom:
+            - sourceRef:
+                generatorRef:
+                  apiVersion: generators.external-secrets.io/v1alpha1
+                  kind: Password
+                  name: ${metadata.name}-creds-postgres
+          target:
+            name: ${metadata.name}-creds-postgres
+            creationPolicy: Owner
+    - id: password-gen-app
+      template:
+        apiVersion: generators.external-secrets.io/v1alpha1
+        kind: Password
+        metadata:
+          name: ${metadata.name}-creds
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          length: 32
+          digits: 8
+          symbols: 0
+          noUpper: false
+          allowRepeat: true
+    - id: creds
+      template:
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata:
+          name: ${metadata.name}-creds
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          refreshInterval: "0"
+          dataFrom:
+            - sourceRef:
+                generatorRef:
+                  apiVersion: generators.external-secrets.io/v1alpha1
+                  kind: Password
+                  name: ${metadata.name}-creds
+          target:
+            name: ${metadata.name}-creds
+            creationPolicy: Owner
+            template:
+              type: Opaque
+              data:
+                password: '{{ .password }}'
+                url: postgres://${metadata.resourceName}-user:{{ .password }}@${metadata.name}.${metadata.namespace}.svc.cluster.local:5432/${parameters.database}?sslmode=disable
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          selector:
+            app: ${metadata.name}
+          ports:
+            - name: postgres
+              port: 5432
+              targetPort: 5432
+    - id: statefulset
+      readyWhen: >-
+        ${has(applied.statefulset.status.readyReplicas) && has(applied.statefulset.status.replicas)
+          && applied.statefulset.status.readyReplicas == applied.statefulset.status.replicas
+          && applied.statefulset.status.replicas > 0}
+      template:
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          replicas: 1
+          serviceName: ${metadata.name}
+          selector:
+            matchLabels:
+              app: ${metadata.name}
+          persistentVolumeClaimRetentionPolicy: |
+            ${environmentConfigs.persistenceEnabled
+              ? {"whenDeleted": "Delete", "whenScaled": "Retain"}
+              : oc_omit()}
+          template:
+            metadata:
+              labels:
+                app: ${metadata.name}
+            spec:
+              containers:
+                - name: postgres
+                  image: getlago/postgres-partman:15.0-alpine
+                  ports:
+                    - name: postgres
+                      containerPort: 5432
+                  env:
+                    - name: POSTGRES_USER
+                      value: postgres
+                    - name: POSTGRES_DB
+                      valueFrom:
+                        configMapKeyRef:
+                          name: ${metadata.name}-config
+                          key: database
+                    - name: POSTGRES_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: ${metadata.name}-creds-postgres
+                          key: password
+                    - name: APPUSER
+                      valueFrom:
+                        configMapKeyRef:
+                          name: ${metadata.name}-config
+                          key: username
+                    - name: APPUSER_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: ${metadata.name}-creds
+                          key: password
+                    - name: PGDATA
+                      value: /var/lib/postgresql/data/pgdata
+                  resources:
+                    limits:
+                      memory: ${environmentConfigs.memory}
+                  volumeMounts:
+                    - name: data
+                      mountPath: /var/lib/postgresql/data
+                    - name: init-scripts
+                      mountPath: /docker-entrypoint-initdb.d
+              volumes:
+                - |
+                  ${environmentConfigs.persistenceEnabled
+                    ? oc_omit()
+                    : {"name": "data", "emptyDir": {}}}
+                - name: init-scripts
+                  configMap:
+                    name: ${metadata.name}-init
+                    defaultMode: 493
+          volumeClaimTemplates: |
+            ${environmentConfigs.persistenceEnabled
+              ? [{"metadata": {"name": "data"},
+                  "spec": {"accessModes": ["ReadWriteOnce"],
+                           "resources": {"requests": {"storage": environmentConfigs.storageSize}},
+                           "storageClassName": environmentConfigs.storageClassName != ""
+                             ? environmentConfigs.storageClassName
+                             : oc_omit()}}]
+              : oc_omit()}

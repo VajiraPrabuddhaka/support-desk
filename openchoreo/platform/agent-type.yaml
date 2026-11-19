@@ -1,0 +1,253 @@
+# AgentType for the support-desk agents: an A2A server on a Deployment.
+#
+# What an agent of this type gets:
+# - Its system prompt: the text of Agent.spec.systemPrompt, inline (value) or read
+#   from a file of its workload (valueFrom.workloadFile), as the release froze it.
+#   It is mounted at /var/run/openchoreo/prompt/system-prompt.md and named in
+#   AGENT_SYSTEM_PROMPT_FILE.
+# - Its workspace skills, each pinned as an image by the Agent controller and mounted
+#   at /skills/<name>. AGENT_SKILLS_DIR names the folder.
+# - The addresses of its MCP tools and A2A agents, in the env vars that its tools'
+#   envBindings name.
+# - LISTEN_ADDR and PUBLIC_URL for its A2A endpoint, which must be named "a2a".
+#   PUBLIC_URL is the agent's in-cluster URL, so the agent card it serves points to
+#   the same origin that its callers resolve.
+# - The env vars, files and secrets of its workload, rendered the way the shipped
+#   component types render them.
+#
+# Not here yet: per-dependency tokens and an egress policy. Both belong to the
+# identity work; the agents call OpenRouter, so egress is open.
+apiVersion: openchoreo.dev/v1alpha1
+kind: AgentType
+metadata:
+  name: support-desk-agent
+  namespace: default
+  annotations:
+    openchoreo.dev/description: "An A2A agent on a Deployment, with its prompt and skills mounted from the Agent"
+spec:
+  workloadType: deployment
+
+  # Agents of this type are built by OpenChoreo: dockerfile-builder builds the
+  # image from the agent's Dockerfile, and writes its Workload from the agent's
+  # workload.yaml.
+  allowedWorkflows:
+    - kind: ClusterWorkflow
+      name: dockerfile-builder
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        replicas:
+          type: integer
+          default: 1
+          minimum: 0
+        resources:
+          type: object
+          default: {}
+          properties:
+            requests:
+              type: object
+              default: {}
+              properties:
+                cpu: {type: string, default: "100m"}
+                memory: {type: string, default: "128Mi"}
+            limits:
+              type: object
+              default: {}
+              properties:
+                cpu: {type: string, default: "1"}
+                memory: {type: string, default: "512Mi"}
+        imagePullPolicy:
+          type: string
+          default: IfNotPresent
+          enum: [Always, IfNotPresent, Never]
+
+  preRenderValidations:
+    - rule: ${agent.systemPrompt != ""}
+      message: "Agents of this type need a system prompt: set spec.systemPrompt.value or spec.systemPrompt.valueFrom.workloadFile."
+    - rule: ${"a2a" in workload.endpoints}
+      message: "Agents of this type serve A2A on an endpoint named a2a."
+    - rule: ${skills.items.all(s, !s.hasScripts)}
+      message: "Skills with a scripts/ directory need a sandboxed agent type."
+
+  resources:
+    - id: serviceaccount
+      template:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        automountServiceAccountToken: false
+
+    # The system prompt as the release froze it, for the agent to read as a file.
+    - id: system-prompt
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${metadata.name}-prompt
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        data:
+          system-prompt.md: ${agent.systemPrompt}
+
+    - id: deployment
+      readyWhen: ${has(applied.deployment.status) && applied.deployment.status.?readyReplicas.orValue(0) >= environmentConfigs.replicas}
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          replicas: ${environmentConfigs.replicas}
+          selector:
+            matchLabels: ${metadata.podSelectors}
+          template:
+            metadata:
+              labels: ${metadata.podSelectors}
+            spec:
+              serviceAccountName: ${metadata.name}
+              automountServiceAccountToken: false
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65532
+                runAsGroup: 65532
+                seccompProfile:
+                  type: RuntimeDefault
+              volumes: |
+                ${dyn(configurations.toVolumes() + dependencies.toVolumes()) + [
+                    {"name": "system-prompt", "configMap": {"name": metadata.name + "-prompt"}},
+                    {"name": "tmp", "emptyDir": {}}]
+                  + skills.items.transformList(i, s, {"name": "skill-" + string(i), "image": {"reference": s.ref}})}
+              containers:
+                - name: main
+                  image: ${workload.container.image}
+                  imagePullPolicy: ${environmentConfigs.imagePullPolicy}
+                  command: |
+                    ${has(workload.container.command) ? workload.container.command : oc_omit()}
+                  args: |
+                    ${has(workload.container.args) ? workload.container.args : oc_omit()}
+                  ports:
+                    - name: a2a
+                      containerPort: ${workload.endpoints.a2a.port}
+                  env: |
+                    ${dyn(dependencies.toContainerEnvs()) + [
+                      {"name": "AGENT_ID", "value": metadata.agentNamespace + "/" + metadata.projectName + "/"
+                          + metadata.agentName + "@" + metadata.environmentName},
+                      {"name": "AGENT_SYSTEM_PROMPT_FILE", "value": "/var/run/openchoreo/prompt/system-prompt.md"},
+                      {"name": "LISTEN_ADDR", "value": ":" + string(workload.endpoints.a2a.port)},
+                      {"name": "PUBLIC_URL", "value": "http://" + metadata.agentName + "." + metadata.namespace
+                          + ".svc.cluster.local:" + string(workload.endpoints.a2a.port)}]
+                      + (size(skills.items) > 0 ? [{"name": "AGENT_SKILLS_DIR", "value": "/skills"}] : [])}
+                  envFrom: ${configurations.toContainerEnvFrom()}
+                  resources:
+                    requests:
+                      cpu: ${environmentConfigs.resources.requests.cpu}
+                      memory: ${environmentConfigs.resources.requests.memory}
+                    limits:
+                      cpu: ${environmentConfigs.resources.limits.cpu}
+                      memory: ${environmentConfigs.resources.limits.memory}
+                  securityContext:
+                    readOnlyRootFilesystem: true
+                    allowPrivilegeEscalation: false
+                    capabilities:
+                      drop: [ALL]
+                  volumeMounts: |
+                    ${dyn(configurations.toContainerVolumeMounts() + dependencies.toContainerVolumeMounts()) + [
+                      {"name": "system-prompt", "mountPath": "/var/run/openchoreo/prompt", "readOnly": true},
+                      {"name": "tmp", "mountPath": "/tmp"}]
+                      + skills.items.transformList(i, s, {"name": "skill-" + string(i), "mountPath": "/skills/" + s.name, "readOnly": true})}
+
+    # Callers resolve the agent's A2A address from this Service, so it is named
+    # after the agent and PUBLIC_URL above uses the same name.
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${metadata.agentName}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          type: ClusterIP
+          selector: ${metadata.podSelectors}
+          ports: ${workload.toServicePorts()}
+
+    # The workload's own env vars, files and secrets, as the shipped worker type
+    # renders them.
+    - id: env-config
+      forEach: ${configurations.toConfigEnvsByContainer()}
+      var: envConfig
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${envConfig.resourceName}
+          namespace: ${metadata.namespace}
+        data: |
+          ${envConfig.envs.transformMapEntry(index, env, {env.name: env.value})}
+    - id: file-config
+      forEach: ${configurations.toConfigFileList()}
+      var: config
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${config.resourceName}
+          namespace: ${metadata.namespace}
+        data:
+          ${config.name}: |
+            ${config.value}
+    - id: secret-env-external
+      forEach: ${configurations.toSecretEnvsByContainer()}
+      var: secretEnv
+      template:
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata:
+          name: ${secretEnv.resourceName}
+          namespace: ${metadata.namespace}
+        spec:
+          refreshInterval: 15s
+          secretStoreRef:
+            name: ${dataplane.secretStore}
+            kind: ClusterSecretStore
+          target:
+            name: ${secretEnv.resourceName}
+            creationPolicy: Owner
+          data: |
+            ${secretEnv.envs.map(secret, {
+              "secretKey": secret.name,
+              "remoteRef": {
+                "key": secret.remoteRef.key,
+                ?"property": secret.remoteRef.?property
+              }
+            })}
+    - id: secret-file-external
+      forEach: ${configurations.toSecretFileList()}
+      var: file
+      template:
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata:
+          name: ${file.resourceName}
+          namespace: ${metadata.namespace}
+        spec:
+          refreshInterval: 15s
+          secretStoreRef:
+            name: ${dataplane.secretStore}
+            kind: ClusterSecretStore
+          target:
+            name: ${file.resourceName}
+            creationPolicy: Owner
+          data:
+            - secretKey: ${file.name}
+              remoteRef:
+                key: ${file.remoteRef.key}
+                property: |
+                  ${has(file.remoteRef.property) ? file.remoteRef.property : oc_omit()}

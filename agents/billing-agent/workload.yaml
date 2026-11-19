@@ -1,0 +1,32 @@
+# The workload descriptor of billing-agent. OpenChoreo's build reads it after it
+# builds the image, and writes the Agent's Workload (billing-agent-workload) from
+# it. The model comes from the environment: see the AgentReleaseBinding in
+# openchoreo/agents/billing-agent.yaml.
+apiVersion: openchoreo.dev/v1alpha1
+metadata:
+  name: billing-agent
+
+endpoints:
+  # The AgentType serves A2A on the endpoint named a2a.
+  - name: a2a
+    type: HTTP
+    port: 8002
+
+configurations:
+  env:
+    - name: OPENROUTER_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: support-desk-openrouter
+          key: apiKey
+    - name: MAX_OUTPUT_TOKENS
+      value: "4096"
+    # No Lago credentials: lago-mcp holds the Lago API key.
+  files:
+    # The system prompt (role and reply format). The build copies it into the
+    # Workload, the Agent names it in spec.systemPrompt, and each release
+    # freezes its text.
+    - name: prompt.md
+      mountPath: /etc/agent
+      valueFrom:
+        path: prompt.md

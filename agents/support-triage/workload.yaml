@@ -1,0 +1,37 @@
+# The workload descriptor of support-triage. OpenChoreo's build reads it after
+# it builds the image, and writes the Agent's Workload (support-triage-workload)
+# from it. The model comes from the environment: see the AgentReleaseBinding in
+# openchoreo/agents/support-triage.yaml.
+apiVersion: openchoreo.dev/v1alpha1
+metadata:
+  name: support-triage
+
+endpoints:
+  # The AgentType serves A2A on the endpoint named a2a.
+  - name: a2a
+    type: HTTP
+    port: 8001
+
+configurations:
+  env:
+    - name: OPENROUTER_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: support-desk-openrouter
+          key: apiKey
+    - name: MAX_OUTPUT_TOKENS
+      value: "4096"
+    - name: SUPPORT_REPO
+      value: geogrid/support
+    # billing-agent is reached over plain http inside the cluster.
+    - name: A2A_ALLOW_HTTP
+      value: "true"
+    # No Gitea credentials: gitea-mcp holds the triage bot's token.
+  files:
+    # The system prompt (role and triage steps). The build copies it into the
+    # Workload, the Agent names it in spec.systemPrompt, and each release
+    # freezes its text.
+    - name: prompt.md
+      mountPath: /etc/agent
+      valueFrom:
+        path: prompt.md
