@@ -13,9 +13,9 @@
 # only the image. When it exists, the build replaces only its image. So this
 # Workload has that name, and holds the endpoint, the dependency and the command.
 #
-# ${LAGO_MCP_IMAGE} is the image already in the cluster's Workload, so applying
-# this again keeps the built image. Before the first build it is the published
-# image, as a stand-in (scripts/deploy-app.sh fills it in).
+# Until the first build (openchoreo/build/lago-mcp-build.yaml) finishes, the
+# Workload runs the published image as a stand-in. Applying this file again puts
+# the stand-in back, so after a build, start a new build if you apply it again.
 apiVersion: openchoreo.dev/v1alpha1
 kind: Workload
 metadata:
@@ -41,7 +41,7 @@ spec:
         envBindings:
           address: LAGO_API_URL
   container:
-    image: ${LAGO_MCP_IMAGE}
+    image: getlago/lago-mcp-server:latest
     command: [/app/lago-mcp-server]
     args: [sse, --host, 0.0.0.0, --port, "8080"]
     env:

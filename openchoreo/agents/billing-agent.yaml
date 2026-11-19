@@ -1,10 +1,10 @@
 # billing-agent: answers billing questions from GeoGrid's tickets, working in Lago
 # through lago-mcp. support-triage calls it over A2A.
 #
-# OpenChoreo builds it from this repository: a WorkflowRun of dockerfile-builder
-# builds agents/billing-agent/Dockerfile, and writes the Agent's Workload from
-# agents/billing-agent/workload.yaml. scripts/deploy-agents.sh starts that run
-# and fills in the ${...} values.
+# OpenChoreo builds it from this repository on GitHub: a WorkflowRun of
+# dockerfile-builder (openchoreo/build/billing-agent-build.yaml) builds
+# agents/billing-agent/Dockerfile, and writes the Agent's Workload from
+# agents/billing-agent/workload.yaml.
 #
 # Order matters: kubectl applies these top to bottom. The AgentReleaseBinding
 # exists before the Agent, so autoDeploy points it at the first release.
@@ -21,8 +21,10 @@ spec:
   workloadOverrides:
     container:
       env:
-        # The model is a choice of the environment, not of the build.
-        - {key: OPENROUTER_MODEL, value: "${OPENROUTER_MODEL}"}
+        # The model is a choice of the environment, not of the build. Any
+        # OpenRouter model with tool calling works, for example a free one such
+        # as nvidia/nemotron-3-ultra-550b-a55b:free.
+        - {key: OPENROUTER_MODEL, value: anthropic/claude-haiku-5.5}
 ---
 apiVersion: openchoreo.dev/v1alpha1
 kind: Agent
@@ -42,9 +44,9 @@ spec:
     name: dockerfile-builder
     parameters:
       repository:
-        url: ${SOURCE_REPO}
+        url: https://github.com/VajiraPrabuddhaka/support-desk
         revision:
-          branch: ${SOURCE_BRANCH}
+          branch: main
         appPath: /agents/billing-agent
       docker:
         context: /
@@ -91,10 +93,12 @@ spec:
           - void_invoice
           - apply_coupon
 
-  # The billing policy: who may be told what, and the only changes allowed. It
-  # is pinned by digest in each release and mounted at /skills/billing-policy.
+  # The billing policy: who may be told what, and the only changes allowed. The
+  # image holds agents/billing-agent/skills/billing-policy, pushed from your
+  # machine (see openchoreo/README.md). It is pinned by digest in each release
+  # and mounted at /skills/billing-policy.
   workspace:
     skills:
       - name: billing-policy
         source:
-          oci: ${BILLING_POLICY_SKILL}
+          oci: host.k3d.internal:10082/support-desk/skills/billing-policy:v1

@@ -1,10 +1,10 @@
 # support-triage: triages GeoGrid's support tickets in Gitea through gitea-mcp,
 # and asks billing-agent about billing tickets over A2A.
 #
-# OpenChoreo builds it from this repository: a WorkflowRun of dockerfile-builder
-# builds agents/support-triage/Dockerfile, and writes the Agent's Workload from
-# agents/support-triage/workload.yaml. scripts/deploy-agents.sh starts that run
-# and fills in the ${...} values.
+# OpenChoreo builds it from this repository on GitHub: a WorkflowRun of
+# dockerfile-builder (openchoreo/build/support-triage-build.yaml) builds
+# agents/support-triage/Dockerfile, and writes the Agent's Workload from
+# agents/support-triage/workload.yaml.
 #
 # Order matters: kubectl applies these top to bottom. The AgentReleaseBinding
 # exists before the Agent, so autoDeploy points it at the first release.
@@ -21,8 +21,10 @@ spec:
   workloadOverrides:
     container:
       env:
-        # The model is a choice of the environment, not of the build.
-        - {key: OPENROUTER_MODEL, value: "${OPENROUTER_MODEL}"}
+        # The model is a choice of the environment, not of the build. Any
+        # OpenRouter model with tool calling works, for example a free one such
+        # as nvidia/nemotron-3-ultra-550b-a55b:free.
+        - {key: OPENROUTER_MODEL, value: anthropic/claude-haiku-5.5}
 ---
 apiVersion: openchoreo.dev/v1alpha1
 kind: Agent
@@ -42,9 +44,9 @@ spec:
     name: dockerfile-builder
     parameters:
       repository:
-        url: ${SOURCE_REPO}
+        url: https://github.com/VajiraPrabuddhaka/support-desk
         revision:
-          branch: ${SOURCE_BRANCH}
+          branch: main
         appPath: /agents/support-triage
       docker:
         context: /
@@ -73,10 +75,12 @@ spec:
         envBindings:
           address: BILLING_AGENT_URL
 
-  # The triage rubric: labels, priorities and the note format. It is pinned by
-  # digest in each release and mounted at /skills/triage-rubric.
+  # The triage rubric: labels, priorities and the note format. The image holds
+  # agents/support-triage/skills/triage-rubric, pushed from your machine (see
+  # openchoreo/README.md). It is pinned by digest in each release and mounted at
+  # /skills/triage-rubric.
   workspace:
     skills:
       - name: triage-rubric
         source:
-          oci: ${TRIAGE_RUBRIC_SKILL}
+          oci: host.k3d.internal:10082/support-desk/skills/triage-rubric:v1

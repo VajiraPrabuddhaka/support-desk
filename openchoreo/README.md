@@ -1,6 +1,6 @@
 # Deploy the Support Desk on OpenChoreo
 
-This guide walks you through deploying the support desk on a local OpenChoreo cluster. The two agents run as OpenChoreo **Agents**, Gitea, Lago and the support desk console run as **Components**, and Lago's database and Redis are **Resources**. OpenChoreo builds the two agents from this repository on GitHub, the way it builds a component. The OpenChoreo artifacts are kept in this folder, so the whole deployment lives next to the code.
+This guide walks you through deploying the support desk on a local OpenChoreo cluster, by applying the YAML files in this folder with `kubectl`. The two agents run as OpenChoreo **Agents**, Gitea, Lago and the support desk console run as **Components**, and Lago's database and Redis are **Resources**. OpenChoreo builds the two agents and the console from this repository on GitHub. The OpenChoreo artifacts are kept in this folder, so the whole deployment lives next to the code.
 
 It needs OpenChoreo with the agent kinds (`Agent`, `AgentType`) and their builds, which are on the `feat/agent-kinds` branch.
 
@@ -36,7 +36,7 @@ Everything belongs to one project, `support-desk`, in the `development` environm
 | lago-pdf | Component | `service`, internal only |
 | lago-ui | Component | `web-application` |
 | lago-mcp | Component | `service`, internal only, built by OpenChoreo's `dockerfile-builder` |
-| desk-console | Component | `web-application`, from an image built on your machine |
+| desk-console | Component | `web-application`, built by OpenChoreo's `dockerfile-builder` |
 
 The three types marked "ours" are in `platform/`. They are namespaced in `default`, so nothing cluster-wide changes:
 
@@ -94,18 +94,18 @@ spec:
     name: dockerfile-builder
     parameters:
       repository:
-        url: https://github.com/VajiraPrabuddhaka/support-desk   # SOURCE_REPO
+        url: https://github.com/VajiraPrabuddhaka/support-desk
         revision:
-          branch: main                                          # SOURCE_BRANCH
+          branch: main
         appPath: /agents/support-triage
       docker:
         context: /
         filePath: /agents/support-triage/Dockerfile
 ```
 
-A build is a WorkflowRun with the `openchoreo.dev/project` and `openchoreo.dev/agent` labels, which `make oc-agents` creates. It runs the following steps:
+A build is a WorkflowRun of that workflow, with the `openchoreo.dev/project` and `openchoreo.dev/agent` labels. You apply it from `build/`. It runs the following steps:
 
-1. It checks out the repository at the commit of the run.
+1. It checks out the repository at the latest commit of the branch.
 2. It builds `agents/<name>/Dockerfile`, with the root of the repository as the context, and pushes the image to the cluster's registry as `default-support-desk-<name>:v1-<commit>`.
 3. It reads `agents/<name>/workload.yaml` and writes the Workload `<name>-workload` with the image it pushed. The Workload names the Agent as its owner (`owner.agentName`), and the descriptor's `prompt.md` (`valueFrom.path`) goes inline into it.
 
@@ -114,8 +114,10 @@ The Agent takes its workload from that Workload. Each new image cuts a new relea
 **Key notes:**
 
 - **Entrypoint** - A workload descriptor has no command, so each agent's Dockerfile builds only that agent and sets it as the `ENTRYPOINT`.
-- **Model** - The model is a choice of the environment, not of the build. Each Agent's binding in `development` sets `OPENROUTER_MODEL` from `.env` with `workloadOverrides`, so changing the model needs no new build.
+- **Model** - The model is a choice of the environment, not of the build. Each Agent's binding in `development` sets `OPENROUTER_MODEL` with `workloadOverrides`, in `agents/<name>.yaml`, so changing the model needs no new build.
 - **Credentials** - The descriptors reference secrets by name (`secretKeyRef`), as the values stay in OpenBao.
+
+The console is built the same way, as a Component. `desk-console` names `dockerfile-builder` in its `spec.workflow`, its build runs `console/Dockerfile`, and the build writes the Workload `desk-console-workload` from `console/workload.yaml`. Its release binding adds the public links to Gitea and Lago with `workloadOverrides`, as these depend on the environment.
 
 ---
 
@@ -124,94 +126,216 @@ The Agent takes its workload from that Workload. Each new image cuts a new relea
 Before you begin, ensure you have:
 
 - OpenChoreo running on k3d (kube context `k3d-openchoreo`), built from `feat/agent-kinds` and installed with the build plane (`--with-build`). A build writes an Agent's Workload with `occ workload create --agent`, so the cluster needs the `openchoreo-cli` image from that branch as well.
-- The code on GitHub. OpenChoreo builds the agents from `SOURCE_REPO` and `SOURCE_BRANCH` in `.env` (this repository's `main` by default), so push your changes before Step 6.
+- The code on GitHub. The Agents, the console and their builds use the `main` branch of https://github.com/VajiraPrabuddhaka/support-desk. To build your own changes, push them to your fork and change `repository.url` in `agents/*.yaml`, `app/desk-console.yaml` and `build/*-build.yaml`.
 - The Agent controller allowed to pin skills from the cluster's registry over HTTP:
   ```bash
   kubectl -n openchoreo-control-plane set env deployment/controller-manager \
     AGENT_SKILL_INSECURE_REGISTRIES=host.k3d.internal:10082
   ```
-- Docker, Go 1.26 or later, `git`, `jq`, `python3`, `make` and `kubectl` on your machine
-- A `.env` with your OpenRouter key: run `make env` and set `OPENROUTER_API_KEY` (see the main [README](../README.md))
-- Memory for about 4 GB of extra pods. If the Docker Compose version of the support desk runs on the same Docker VM, stop it first with `make down`.
+- Docker, Go 1.26 or later, `jq` and `kubectl` on your machine
+- A `.env` with your OpenRouter key: `./scripts/init-env.sh` creates it with generated secrets, and then you set `OPENROUTER_API_KEY` (see the main [README](../README.md))
+- Memory for about 4 GB of extra pods. If the Docker Compose version of the support desk runs on the same Docker VM, stop it first with `docker compose down`.
 
 ---
 
 ## Deploy
 
-`make oc-up` runs all the steps below in order. Each step is also its own target, so you can run them one at a time and check the result in between.
-
-### Step 1: Push the Images
+Run the commands from the root of this repository, in one shell. Some of them read values from `.env`, so load it first:
 
 ```bash
-make oc-images
+set -a; . ./.env; set +a
 ```
 
-This builds the console's image and one image per skill, and pushes them to the cluster's registry (`localhost:10082`, which the cluster pulls as `host.k3d.internal:10082`). OpenChoreo builds the agents itself in Step 6. Each tag is a hash of its sources, so a change gets a new tag.
+### Step 1: Store the Secrets in OpenBao
 
-### Step 2: Store the Secrets
+The SecretReferences in `app/secret-references.yaml` read the support desk's secrets from OpenBao, under `secret/support-desk/`. Write the OpenRouter key and Lago's keys from `.env`. `jq` builds the JSON and `bao` reads it from stdin, so the values never show up in a command line:
 
 ```bash
-make oc-secrets
+jq -n '{apiKey: env.OPENROUTER_API_KEY}' |
+  kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN=root \
+    bao kv put -mount=secret support-desk/openrouter -
+
+jq -n 'env | {
+    secretKeyBase: .LAGO_SECRET_KEY_BASE,
+    rsaPrivateKey: .LAGO_RSA_PRIVATE_KEY,
+    encryptionPrimaryKey: .LAGO_ENCRYPTION_PRIMARY_KEY,
+    encryptionDeterministicKey: .LAGO_ENCRYPTION_DETERMINISTIC_KEY,
+    encryptionKeyDerivationSalt: .LAGO_ENCRYPTION_KEY_DERIVATION_SALT,
+    adminPassword: .LAGO_ADMIN_PASSWORD,
+    apiKey: .LAGO_API_KEY}' |
+  kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN=root \
+    bao kv put -mount=secret support-desk/lago -
 ```
 
-This writes the OpenRouter key and Lago's keys from `.env` to OpenBao, under `secret/support-desk/`. The values go through stdin and never show up in a command line.
+The two bots' Gitea tokens follow in Step 6, once Gitea is seeded.
+
+### Step 2: Push the Skill Images
+
+OpenChoreo builds the agents and the console, in Steps 7 and 8. An Agent takes a skill only from an OCI image, though, so build the two skill images and push them to the cluster's registry, which your machine reaches as `localhost:10082` and the cluster as `host.k3d.internal:10082`:
+
+```bash
+for skill in agents/support-triage/skills/triage-rubric agents/billing-agent/skills/billing-policy; do
+  image=localhost:10082/support-desk/skills/$(basename "$skill"):v1
+  printf 'FROM scratch\nCOPY . /\n' | docker build -t "$image" -f - "$skill"
+  docker push "$image"
+done
+```
+
+A skill image holds the skill's files at its root, as the Agent controller and the image volume that mounts it expect. The tags match the image references in `agents/*.yaml`. To ship a change to a skill, push it under a new tag and update the reference, so that a new release picks it up.
 
 ### Step 3: Apply the Platform Kinds
 
 ```bash
-make oc-platform
+kubectl apply -f openchoreo/platform/
 ```
 
-### Step 4: Deploy Gitea, Lago and the MCP Servers
+This adds the `support-desk-agent` AgentType, the `postgres-partman` ResourceType and the `worker-with-shared-volume` ComponentType.
+
+### Step 4: Create the Project
 
 ```bash
-make oc-app
+kubectl apply -f openchoreo/app/project.yaml
+kubectl apply -f openchoreo/app/secret-references.yaml
 ```
 
-This creates the project, the secret references, `lago-db` and `lago-redis` (and points their bindings at their releases), the components, and starts the build of `lago-mcp`. It waits until Gitea and the Lago API are up. The first start takes a few minutes, as it pulls the images and runs Lago's migrations. On a fresh install, `gitea-mcp` stays in `ContainerCreating` until Step 5 stores the triage bot's token, as its pod mounts that token.
+OpenChoreo creates a data plane namespace for the project in `development`. The later steps reach Gitea, Lago and the agents there, so keep its name (it can take a few seconds to show up):
+
+```bash
+NS=$(kubectl get namespace \
+  -l openchoreo.dev/namespace=default,openchoreo.dev/project=support-desk,openchoreo.dev/environment=development \
+  -o jsonpath='{.items[0].metadata.name}')
+echo "$NS"
+```
+
+### Step 5: Deploy Lago, Gitea and the MCP Servers
+
+Start with Lago's database and Redis, which are Resources:
+
+```bash
+kubectl apply -f openchoreo/app/lago-data.yaml
+```
+
+A Resource has no autoDeploy, so point each binding at its Resource's release. If a Resource has no release yet, wait a few seconds and run this again:
+
+```bash
+for r in lago-db lago-redis; do
+  release=$(kubectl get resource "$r" -n default -o jsonpath='{.status.latestRelease.name}')
+  if [ -n "$release" ]; then
+    kubectl patch resourcereleasebinding "$r-development" -n default --type=merge \
+      -p "{\"spec\":{\"resourceRelease\":\"$release\"}}"
+  else
+    echo "$r has no release yet"
+  fi
+done
+```
+
+Then apply the components:
+
+```bash
+kubectl apply -f openchoreo/app/lago-pdf.yaml -f openchoreo/app/lago-api.yaml \
+  -f openchoreo/app/lago-worker.yaml -f openchoreo/app/lago-clock.yaml -f openchoreo/app/lago-ui.yaml
+kubectl apply -f openchoreo/app/gitea.yaml -f openchoreo/app/gitea-mcp.yaml -f openchoreo/app/lago-mcp.yaml
+```
 
 > [!NOTE]
 > Each component file applies its ReleaseBinding and Workload before the Component. That way, autoDeploy finds the environment settings (resources, volume sizes, external URLs) in place and only fills in the release.
 
-The build of `lago-mcp` takes a few more minutes, as it compiles Lago's MCP server from source. Until it finishes, `lago-mcp` runs the published image as a stand-in. The build writes its image into the Workload named `lago-mcp-workload`, which is why that Workload has this name: the build finds it and replaces only its image, and keeps the endpoint, the dependency and the command. Check the build with:
+Start the build of `lago-mcp`:
 
 ```bash
-kubectl get workflowrun lago-mcp-build-01 -n default
+kubectl apply -f openchoreo/build/lago-mcp-build.yaml
 ```
 
-### Step 5: Bootstrap Gitea and Lago
+The build takes a few minutes, as it compiles Lago's MCP server from source. Until it finishes, `lago-mcp` runs the published image as a stand-in. The build writes its image into the Workload named `lago-mcp-workload`, which is why that Workload has this name: the build finds it and replaces only its image, and keeps the endpoint, the dependency and the command. Applying `app/lago-mcp.yaml` again puts the stand-in back, so start a new build if you do.
+
+Wait until Gitea and the Lago API are up. The first start takes a few minutes, as it pulls the images and runs Lago's migrations:
 
 ```bash
-make oc-bootstrap
+kubectl wait --for=condition=Ready releasebinding/gitea-development releasebinding/lago-api-development \
+  -n default --timeout=15m
+kubectl rollout status deployment -n "$NS" -l openchoreo.dev/component=lago-api --timeout=15m
+kubectl rollout status deployment -n "$NS" -l openchoreo.dev/component=gitea --timeout=10m
 ```
 
-OpenChoreo has no one-off job type, so this runs from your machine:
+On a fresh install, `gitea-mcp` stays in `ContainerCreating` until Step 6 stores the triage bot's token, as its pod mounts that token.
 
-1. It creates the Gitea admin account inside the Gitea pod.
-2. It runs `tools/seed` against Gitea and the Lago API through port-forwards, which creates the five scenarios.
-3. It writes the two bots' Gitea tokens to OpenBao, where the secret references read them: triage-bot's for gitea-mcp, and support-inbox's for the console.
+### Step 6: Seed Gitea and Lago
 
-### Step 6: Deploy the Agents
+OpenChoreo has no one-off job type, so the seed runs from your machine. First, create the Gitea admin account inside the Gitea pod. The values reach the pod on stdin:
 
 ```bash
-make oc-agents
+GITEA_POD=$(kubectl get pod -n "$NS" -l openchoreo.dev/component=gitea -o name | head -1)
+{ echo "export GITEA_ADMIN_USER='$GITEA_ADMIN_USER' GITEA_ADMIN_PASSWORD='$GITEA_ADMIN_PASSWORD' GITEA_ADMIN_EMAIL='$GITEA_ADMIN_EMAIL'"
+  cat infra/gitea/create-admin.sh; } | kubectl exec -i -n "$NS" "$GITEA_POD" -- sh -s
 ```
 
-This applies the two Agents and their bindings in `development`, with the skill images from Step 1. Then it starts a build of each agent, a WorkflowRun of the Agent's workflow pinned to the head commit of `SOURCE_BRANCH` (see [How the Agents Are Built](#how-the-agents-are-built)), and waits until both agents are ready. The first build takes a few minutes, as it downloads the Go modules. Once a build writes the Workload, the Agent controller pins the skills, cuts a release and binds it to `development`.
-
-A run is named after its agent and commit, so running `make oc-agents` again for the same commit does not build again. To deploy a change to an agent, push it and run `make oc-agents` again. Check the builds with:
+Then run the seed program against Gitea and the Lago API through port-forwards. It creates the five scenarios, and writes the two bots' Gitea tokens to `.secrets/openchoreo/`:
 
 ```bash
-kubectl get workflowruns -n default -l openchoreo.dev/agent
+kubectl port-forward -n "$NS" svc/gitea 13001:3000 >/dev/null & GITEA_PF=$!
+kubectl port-forward -n "$NS" svc/lago-api 13000:3000 >/dev/null & LAGO_PF=$!
+sleep 3
+GITEA_URL=http://localhost:13001 LAGO_API_URL=http://localhost:13000 SECRETS_DIR=.secrets/openchoreo \
+  go run ./tools/seed
+kill $GITEA_PF $LAGO_PF
 ```
 
-### Step 7: Deploy the Console
+Finally, write the two tokens to OpenBao, where the secret references read them: triage-bot's for gitea-mcp, and support-inbox's for the console:
 
 ```bash
-make oc-console
+for bot in triage-bot support-inbox; do
+  jq -n --rawfile t ".secrets/openchoreo/$bot.token" '{token: ($t | rtrimstr("\n"))}' |
+    kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN=root \
+      bao kv put -mount=secret "support-desk/$bot" -
+done
 ```
 
-This deploys the console as the `desk-console` Component, a `web-application` that runs the image from Step 1 with the command `console`. It reaches Gitea and the Lago API through endpoint dependencies, like any other component. support-triage is the exception: a Component cannot depend on an Agent yet, so the Workload sets `TRIAGE_AGENT_URL` to `http://support-triage:8001`, the agent's Service in the project's namespace. The agent's network policy lets in every pod of the project, so the call goes through.
+These two secret references refresh every minute, so `gitea-mcp` starts shortly after.
+
+### Step 7: Deploy and Build the Agents
+
+Apply the two Agents. Each file applies the Agent's binding in `development` first, with the model, and then the Agent:
+
+```bash
+kubectl apply -f openchoreo/agents/billing-agent.yaml -f openchoreo/agents/support-triage.yaml
+```
+
+The Agents are not ready yet, with the reason `AwaitingBuild`, as no build has written their Workloads. Start the builds:
+
+```bash
+kubectl apply -f openchoreo/build/billing-agent-build.yaml -f openchoreo/build/support-triage-build.yaml
+```
+
+Each build checks out `main` from GitHub, builds the agent's Dockerfile, pushes the image and writes the Agent's Workload (see [How the Agents Are Built](#how-the-agents-are-built)). The first build takes a few minutes, as it downloads the Go modules. Follow the builds, and wait for the agents once both builds succeed:
+
+```bash
+kubectl get workflowruns -n default -l openchoreo.dev/agent -w
+kubectl wait --for=condition=Ready agent/billing-agent agent/support-triage -n default --timeout=10m
+kubectl wait --for=condition=Ready agentreleasebinding/billing-agent-development \
+  agentreleasebinding/support-triage-development -n default --timeout=10m
+```
+
+Once a build writes the Workload, the Agent controller pins the skills, cuts a release and binds it to `development`.
+
+To deploy a change to an agent, push it to GitHub and apply a copy of its build file under a new name (for example, `support-triage-build-02`), as a WorkflowRun runs once. To change an agent's model, edit `OPENROUTER_MODEL` in its binding in `agents/<name>.yaml` and apply the file again. That needs no new build.
+
+### Step 8: Deploy and Build the Console
+
+Apply the console's release binding and Component, and start its build:
+
+```bash
+kubectl apply -f openchoreo/app/desk-console.yaml
+kubectl apply -f openchoreo/build/desk-console-build.yaml
+```
+
+The build checks out `main` from GitHub, builds `console/Dockerfile`, pushes the image and writes the Workload `desk-console-workload` from `console/workload.yaml`. The Component then cuts a release, and autoDeploy binds it to `development`. Follow the build, and wait for the console once the build succeeds:
+
+```bash
+kubectl get workflowrun desk-console-build-01 -n default -w
+kubectl wait --for=condition=Ready releasebinding/desk-console-development -n default --timeout=10m
+```
+
+The console is the `desk-console` Component, a `web-application`. It reaches Gitea and the Lago API through endpoint dependencies, like any other component. support-triage is the exception: a Component cannot depend on an Agent yet, so the Workload sets `TRIAGE_AGENT_URL` to `http://support-triage:8001`, the agent's Service in the project's namespace. The agent's network policy lets in every pod of the project, so the call goes through.
 
 The console's name is kept short on purpose. OpenChoreo shortens a longer component name in the external hostname, so `support-console`, for example, would show up as `support-conso`.
 
@@ -221,25 +345,31 @@ The console's name is kept short on purpose. OpenChoreo shortens a longer compon
 
 Open the console at http://http-desk-console-development-default-1f3c1113.openchoreoapis.localhost:19080. Pick a ticket and click **Triage with AI**. The agent activity panel shows each step as the agents work, and the account panel shows the customer's invoices and coupons in Lago. **New request** files a new ticket the way a customer would. See [Step 3 of the main README](../README.md#step-3-triage-tickets-in-the-console) for the parts of the console.
 
-You can also triage from the terminal. Triage a ticket:
+You can also triage from the terminal, with the `ask` client through a port-forward to support-triage's Service:
 
 ```bash
-make oc-triage T=1
+kubectl port-forward -n "$NS" svc/support-triage 18000:8001 >/dev/null &
+go run ./tools/ask -agent http://localhost:18000 "Triage ticket #1."
 ```
 
-Or triage every untriaged ticket:
+Ask for "Triage all untriaged tickets." to triage every untriaged ticket. To ask billing-agent directly, forward `svc/billing-agent` on port 8002 the same way.
+
+In a second terminal, follow what the agents do (set `NS` there as in Step 4):
 
 ```bash
-make oc-triage
+kubectl logs -f -n "$NS" -l 'openchoreo.dev/agent in (support-triage,billing-agent)' \
+  --prefix --max-log-requests 4 --tail 20
 ```
 
-In a second terminal, follow what the agents do:
+Check the state of the support desk:
 
 ```bash
-make oc-logs
+kubectl get agents,agentreleasebindings,workflowruns -n default
+kubectl get releasebindings,resourcereleasebindings -n default
+kubectl get pods -n "$NS"
 ```
 
-`make oc-status` shows the bindings, the pods and these URLs:
+Open the UIs at the following URLs:
 
 | UI | URL | Sign in with |
 |---|---|---|
@@ -257,21 +387,19 @@ The hostnames follow OpenChoreo's naming, `<endpoint>-<component>-<environment>-
 openchoreo/
 ├── platform/        the AgentType, ResourceType and ComponentType of the support desk
 ├── app/             the project, secret references, resources and components, the console included
-├── agents/          the two Agents and their bindings (${...} values are filled in at deploy time)
-├── build/           the WorkflowRun that builds lago-mcp
-└── scripts/         the steps behind the oc-* make targets
+├── agents/          the two Agents, each with its binding in development
+└── build/           the WorkflowRuns that build lago-mcp, the two agents and the console
 ```
 
-Each agent's `Dockerfile` and `workload.yaml` are next to its code in `agents/<name>/` at the root of the repository, where the build reads them.
+Each agent's `Dockerfile` and `workload.yaml` are next to its code in `agents/<name>/` at the root of the repository, and the console's are in `console/`, where the builds read them.
 
 ---
 
 ## Known Limits
 
-- **Agent builds** - A build starts from a WorkflowRun, which `make oc-agents` creates. Agents do not build on a push yet (`autoBuild`).
-- **Skills** - An Agent takes a skill only from an OCI image, so `make oc-images` builds and pushes the skills' images. Skills from Git are not supported yet.
-- **Console build** - The console's image is built on your machine. A Component can build with `dockerfile-builder` too, so it can move to OpenChoreo the same way as the agents.
-- **Bootstrap** - It runs from your machine, as there is no one-off job type.
+- **Agent builds** - A build starts from a WorkflowRun that you apply. Agents do not build on a push yet (`autoBuild`).
+- **Skills** - An Agent takes a skill only from an OCI image, so you build and push the skills' images yourself. Skills from Git are not supported yet.
+- **Seed** - It runs from your machine, as there is no one-off job type.
 - **Environments** - Only `development`. An Agent deploys to the first environment of its project's pipeline.
 - **A2A** - The call between the agents is not authenticated yet.
 - **Agent credentials** - The agents carry none for now. gitea-mcp and lago-mcp act with their own credentials for any caller in the project, and lago-mcp offers every Lago tool, as the tool allowlist lives in billing-agent.
@@ -284,8 +412,12 @@ Each agent's `Dockerfile` and `workload.yaml` are next to its code in `agents/<n
 
 ## Clean Up
 
+Delete the agents first, then the builds, then the rest of the support desk:
+
 ```bash
-make oc-down
+kubectl delete -f openchoreo/agents/
+kubectl delete -f openchoreo/build/ --ignore-not-found
+kubectl delete -f openchoreo/app/
 ```
 
-This removes the console, the agents and their builds, the components, the resources (with their data), the project and the secret references. The platform kinds in `platform/` and the values in OpenBao stay. Remove them with `kubectl delete -f openchoreo/platform/` and from OpenBao if you no longer need them.
+Deleting an Agent also deletes its releases and the Workload that its build wrote. `kubectl` goes through the files in `app/` in alphabetical order, so the project and the secret references go last. The platform kinds in `platform/` and the values in OpenBao stay. Remove them with `kubectl delete -f openchoreo/platform/` and from OpenBao if you no longer need them.

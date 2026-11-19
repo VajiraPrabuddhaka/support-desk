@@ -1,0 +1,58 @@
+# The workload descriptor of the console. OpenChoreo's build reads it after it
+# builds the image, and writes the Component's Workload (desk-console-workload)
+# from it. The public links to Gitea and Lago come from the environment: see the
+# ReleaseBinding in openchoreo/app/desk-console.yaml.
+apiVersion: openchoreo.dev/v1alpha1
+metadata:
+  name: desk-console
+
+endpoints:
+  - name: http
+    type: HTTP
+    port: 8080
+    visibility: [external]
+
+dependencies:
+  endpoints:
+    - project: support-desk
+      component: gitea
+      name: http
+      visibility: project
+      envBindings:
+        address: GITEA_URL
+    # lago-api's endpoint carries basePath /api/v1, so this is the REST API's
+    # base URL.
+    - project: support-desk
+      component: lago-api
+      name: http
+      visibility: project
+      envBindings:
+        address: LAGO_API_URL
+
+configurations:
+  env:
+    - name: LISTEN_ADDR
+      value: ":8080"
+    - name: SUPPORT_REPO
+      value: geogrid/support
+    # A Component cannot declare a dependency on an Agent yet (a connection
+    # names a component, not an agent), so the console reaches support-triage
+    # by its Service name in the project's namespace.
+    - name: TRIAGE_AGENT_URL
+      value: http://support-triage:8001
+    - name: GITEA_TOKEN_FILE
+      value: /var/run/secrets/gitea/token
+    # Only read with: the console shows the account, it changes nothing.
+    - name: LAGO_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: support-desk-lago
+          key: apiKey
+  files:
+    # support-inbox's Gitea token, in OpenBao once Gitea is seeded.
+    - name: token
+      mountPath: /var/run/secrets/gitea
+      valueFrom:
+        secretKeyRef:
+          name: support-desk-support-inbox
+          key: token

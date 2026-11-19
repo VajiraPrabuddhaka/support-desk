@@ -6,7 +6,7 @@ Nothing is mocked. Gitea and Lago run locally in Docker with their official MCP 
 
 A small web console comes with it. You can see the tickets, file new ones and triage a ticket with one click, while each step of the agents' work shows up as it happens.
 
-The same support desk also runs on OpenChoreo, with the agents as OpenChoreo Agents that OpenChoreo builds from this repository. See [openchoreo/README.md](openchoreo/README.md).
+The same support desk also runs on OpenChoreo, with the agents as OpenChoreo Agents. OpenChoreo builds the agents and the console from this repository. See [openchoreo/README.md](openchoreo/README.md).
 
 ## Table of Contents
 
@@ -345,7 +345,7 @@ support-triage accepts plain http to billing-agent only when `A2A_ALLOW_HTTP=tru
 ├── agents/
 │   ├── support-triage/     main.go, prompt.md, skills/triage-rubric, Dockerfile, workload.yaml
 │   └── billing-agent/      main.go, prompt.md, skills/billing-policy, Dockerfile, workload.yaml
-├── console/                the support desk console: a Go server and its web page
+├── console/                the support desk console: a Go server, its web page, Dockerfile, workload.yaml
 ├── internal/
 │   ├── agentkit/           shared code: model, instructions, MCP, A2A server, tool logging
 │   └── tickets/            the ticket format that the seed and the console share
@@ -360,7 +360,7 @@ support-triage accepts plain http to billing-agent only when `A2A_ALLOW_HTTP=tru
 └── Makefile
 ```
 
-Each agent's own `Dockerfile` and `workload.yaml` are for OpenChoreo, which builds the agent from them. Docker Compose uses the `Dockerfile` at the root.
+The `Dockerfile` and `workload.yaml` of each agent and of the console are for OpenChoreo, which builds them from these. Docker Compose uses the `Dockerfile` at the root.
 
 ---
 

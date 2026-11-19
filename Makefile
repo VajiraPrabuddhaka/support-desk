@@ -1,9 +1,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help env up down reset ps logs triage ask-billing check \
-	oc-up oc-images oc-secrets oc-platform oc-app oc-bootstrap oc-agents oc-console \
-	oc-status oc-logs oc-triage oc-ask-billing oc-down
+.PHONY: help env up down reset ps logs triage ask-billing check
 
 help: ## Show the targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z-]+:.*## / { printf "  %-15s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -42,45 +40,3 @@ check: ## Format check, vet, test and build the Go code
 	go test ./...
 	go build ./...
 
-# ---------------------------------------------------------------- OpenChoreo
-# The same support desk on OpenChoreo (kube context k3d-openchoreo). See
-# openchoreo/README.md. oc-up runs every step in order.
-OC := ./openchoreo/scripts
-
-oc-up: oc-images oc-secrets oc-platform oc-app oc-bootstrap oc-agents oc-console ## OpenChoreo: deploy everything, step by step
-
-oc-images: ## OpenChoreo: build and push the console's and skills' images
-	$(OC)/push-images.sh
-
-oc-secrets: ## OpenChoreo: write the secrets from .env to OpenBao
-	$(OC)/put-secrets.sh
-
-oc-platform: ## OpenChoreo: apply the AgentType, ResourceType and ComponentType
-	kubectl apply -f openchoreo/platform/
-
-oc-app: ## OpenChoreo: deploy the project, Gitea, Lago and the MCP servers
-	$(OC)/deploy-app.sh
-
-oc-bootstrap: ## OpenChoreo: create the Gitea admin, seed, store the bots' tokens
-	$(OC)/bootstrap.sh
-
-oc-agents: ## OpenChoreo: build billing-agent and support-triage from GitHub, deploy them
-	$(OC)/deploy-agents.sh
-
-oc-console: ## OpenChoreo: deploy the support desk console
-	$(OC)/deploy-console.sh
-
-oc-status: ## OpenChoreo: show bindings, pods and URLs
-	$(OC)/status.sh
-
-oc-logs: ## OpenChoreo: follow the two agents' logs (tool calls included)
-	$(OC)/logs.sh
-
-oc-triage: ## OpenChoreo: triage ticket T (make oc-triage T=1), or all untriaged
-	$(OC)/ask.sh support-triage "$(if $(T),Triage ticket #$(T).,Triage all untriaged tickets.)"
-
-oc-ask-billing: ## OpenChoreo: ask billing-agent directly: make oc-ask-billing Q="..."
-	$(OC)/ask.sh billing-agent "$(Q)"
-
-oc-down: ## OpenChoreo: remove the support desk (keeps platform kinds and OpenBao values)
-	$(OC)/teardown.sh

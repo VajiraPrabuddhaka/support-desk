@@ -1,7 +1,7 @@
 # Lago's PostgreSQL database and its Redis (Valkey) store, as OpenChoreo Resources.
 #
-# A Resource has no autoDeploy: scripts/deploy-app.sh points each binding at the
-# Resource's latest release once it exists.
+# A Resource has no autoDeploy: once a Resource has a release, point its binding
+# at it with spec.resourceRelease (see openchoreo/README.md).
 apiVersion: openchoreo.dev/v1alpha1
 kind: Resource
 metadata:

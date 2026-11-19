@@ -2,8 +2,8 @@
 # from OpenBao, so the agents that call it send no credentials. It is not
 # exposed outside the project.
 #
-# The token exists once scripts/bootstrap.sh has run, so on a fresh install the
-# pod waits for its secret until then.
+# The token exists once Gitea is seeded and the token is in OpenBao, so on a
+# fresh install the pod waits for its secret until then.
 # Order matters: kubectl applies these top to bottom. The Workload exists before
 # the Component, so autoDeploy finds it.
 apiVersion: openchoreo.dev/v1alpha1
