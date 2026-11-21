@@ -2,7 +2,7 @@
 
 This guide walks you through deploying the support desk on a local OpenChoreo cluster, by applying the YAML files in this folder with `kubectl`. The two agents run as OpenChoreo **Agents**, each with an **Endpoint** for its A2A endpoint, Gitea, Lago and the support desk console run as **Components**, and Lago's database and Redis are **Resources**. OpenChoreo builds the two agents and the console from this repository on GitHub. The OpenChoreo artifacts are kept in this folder, so the whole deployment lives next to the code.
 
-It needs OpenChoreo with the agent kinds (`Agent`, `AgentType`), their builds and the `A2A` endpoint protocol, which are on the `feat/agent-kinds` branch.
+It needs OpenChoreo with the agent kinds (`Agent`, `AgentType`), their builds, the `A2A` endpoint protocol and Endpoints that route to an Agent, which are on the `feat/agent-kinds` branch.
 
 ## Table of Contents
 
@@ -137,7 +137,8 @@ The console is built the same way, as a Component. `desk-console` names `dockerf
 
 Before you begin, ensure you have:
 
-- OpenChoreo running on k3d (kube context `k3d-openchoreo`), built from `feat/agent-kinds` and installed with the build plane (`--with-build`). A build writes an Agent's Workload with `occ workload create --agent`, so the cluster needs the `openchoreo-cli` image from that branch as well.
+- OpenChoreo running on a local k3d or kind cluster, built from `feat/agent-kinds` and installed with the workflow plane (`--with-build` in the k3d installer). A build writes an Agent's Workload with `occ workload create --agent`, so the cluster needs the `openchoreo-cli` image from that branch as well. The steps use the current kube context, so switch to the cluster first (e.g., `kubectl config use-context kind-openchoreo`).
+- The local setup that the k3d installer gives you, which a kind cluster has to match: the cluster reaches your machine as `host.k3d.internal`, the registry is at `localhost:10082`, and the data plane gateway is at `openchoreoapis.localhost:19080`.
 - The code on GitHub. The Agents, the console and their builds use the `main` branch of https://github.com/VajiraPrabuddhaka/support-desk. To build your own changes, push them to your fork and change `repository.url` in `agents/*.yaml`, `app/desk-console.yaml` and `build/*-build.yaml`.
 - The Agent controller allowed to pin skills from the cluster's registry over HTTP:
   ```bash
@@ -423,7 +424,7 @@ Each agent's `Dockerfile` and `workload.yaml` are next to its code in `agents/<n
 - **Environments** - Only `development`. An Agent deploys to the first environment of its project's pipeline.
 - **A2A** - The call between the agents is not authenticated yet.
 - **A2A Endpoints** - The callers do not use the URL that an agent's Endpoint reports yet, as an agent's `tools.a2a` resolves only from the Service that its callee's AgentType renders. That is why `support-desk-agent` still renders the Service, and `a2a-http` routes to it instead of rendering its own.
-- **External A2A** - `a2a-http` can expose an agent on the external gateway (`external` visibility), but an A2A client cannot call the agent through it yet. The agent card carries the agent's in-cluster `PUBLIC_URL`, so the client is sent to an address it cannot reach. The Endpoints ask for `project` visibility only.
+- **External A2A** - `a2a-http` can expose an agent on the external gateway (`external` visibility), but an A2A client that follows the agent card cannot call the agent through it yet. The card carries the agent's in-cluster `PUBLIC_URL`, so the client is sent to an address it cannot reach. `ask` and the console are not affected, as they point the card at the URL they were given. The Endpoints ask for `project` visibility only.
 - **Agent credentials** - The agents carry none for now. gitea-mcp and lago-mcp act with their own credentials for any caller in the project, and lago-mcp offers every Lago tool, as the tool allowlist lives in billing-agent.
 - **Console to agent** - A Component cannot declare a dependency on an Agent yet, so the console's Workload sets support-triage's address by hand.
 - **Console sign-in** - The console has no sign-in. Anyone who can open its URL can file and triage tickets, which is fine for a local cluster only.

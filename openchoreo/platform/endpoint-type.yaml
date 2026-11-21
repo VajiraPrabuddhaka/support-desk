@@ -7,9 +7,9 @@
 #   EndpointReleaseBinding (status.urls.project). The AgentType renders that Service,
 #   so this type renders nothing for project visibility.
 # - External visibility - An HTTPRoute on the external gateway to the agent's
-#   Service, and the URL of that route. A2A clients cannot use it yet, as the agent
-#   card carries the agent's in-cluster PUBLIC_URL, so a client that fetches the card
-#   through the gateway is sent to an address it cannot reach.
+#   Service, and the URL of that route. An A2A client that follows the agent card
+#   cannot use it yet, as the card carries the agent's in-cluster PUBLIC_URL, so the
+#   client is sent to an address it cannot reach.
 #
 # The type is per transport. An agent that serves A2A over gRPC would need a type of
 # its own, with a GRPCRoute.
