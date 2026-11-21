@@ -84,3 +84,30 @@ spec:
       - name: triage-rubric
         source:
           oci: host.k3d.internal:10082/support-desk/skills/triage-rubric:v1
+---
+# support-triage's A2A endpoint, exposed through a2a-http, the type that
+# support-desk-agent allows for A2A. The Endpoint is the agent's, so deleting the
+# agent deletes it. It asks for project visibility only, which is where the
+# console calls the agent from: its EndpointReleaseBinding reports the agent's
+# in-cluster URL. The console still sets that address by hand (TRIAGE_AGENT_URL),
+# as a Component cannot depend on an agent yet.
+apiVersion: openchoreo.dev/v1alpha1
+kind: Endpoint
+metadata:
+  name: support-triage-a2a
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    agentName: support-triage
+  type:
+    kind: EndpointType
+    name: a2a-http
+  visibility: [project]
+  backendRefs:
+    - name: support-triage
+      kind: Agent
+      agent:
+        name: support-triage
+        endpoint: a2a
+  autoDeploy: true

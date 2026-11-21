@@ -1,0 +1,82 @@
+# EndpointType for the A2A endpoints of the support-desk agents: A2A (Agent2Agent)
+# over HTTP. support-desk-agent allows it for the protocol A2A (allowedEndpoints),
+# and the Endpoint of each agent in openchoreo/agents/ uses it.
+#
+# What an Endpoint of this type gets:
+# - Project visibility - The in-cluster URL of the agent's Service, reported on its
+#   EndpointReleaseBinding (status.urls.project). The AgentType renders that Service,
+#   so this type renders nothing for project visibility.
+# - External visibility - An HTTPRoute on the external gateway to the agent's
+#   Service, and the URL of that route. A2A clients cannot use it yet, as the agent
+#   card carries the agent's in-cluster PUBLIC_URL, so a client that fetches the card
+#   through the gateway is sent to an address it cannot reach.
+#
+# The type is per transport. An agent that serves A2A over gRPC would need a type of
+# its own, with a GRPCRoute.
+#
+# Not here yet: authentication. The agents call each other without credentials, so
+# both URLs declare the security scheme none.
+apiVersion: openchoreo.dev/v1alpha1
+kind: EndpointType
+metadata:
+  name: a2a-http
+  namespace: default
+  annotations:
+    openchoreo.dev/description: "Exposes the A2A endpoint of an agent, with A2A over HTTP"
+spec:
+  validations:
+    - rule: ${backends.all(b, b.protocol == "A2A")}
+      message: "a2a-http exposes A2A endpoints only."
+    - rule: ${visibility.all(v, v == "project" || v == "external")}
+      message: "a2a-http serves project and external visibility only."
+    # The route goes to the Service of the agent's AgentType. A backend at weight 0
+    # gets no traffic, so it needs no Service and is left out of the route.
+    - rule: ${backends.all(b, b.weight == 0 || b.serviceName != "")}
+      message: "a2a-http routes to the Service that the agent's AgentType renders, and this agent's type renders none."
+
+  resources:
+    - id: httproute-external
+      includeWhen: ${"external" in visibility}
+      template:
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        metadata:
+          name: ${oc_generate_name(metadata.endpointName, "external")}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          parentRefs:
+            - name: ${gateway.ingress.external.name}
+              namespace: ${gateway.ingress.external.namespace}
+          hostnames: |
+            ${[gateway.ingress.external.?http, gateway.ingress.external.?https]
+              .filter(g, g.hasValue()).map(g, g.value().host).distinct()
+              .map(h, metadata.environmentName + "-" + metadata.endpointName + "." + h)}
+          rules:
+            # The whole agent: its card at /.well-known/agent-card.json and its
+            # JSON-RPC calls at /a2a.
+            - matches:
+                - path:
+                    type: PathPrefix
+                    value: /
+              backendRefs: |
+                ${backends.filter(b, b.serviceName != "")
+                  .map(b, {"name": b.serviceName, "port": b.port, "weight": b.weight})}
+
+  urls:
+    # The agent's own Service. With more than one backend there is no single
+    # Service to report, so the URL is left out.
+    project:
+      includeWhen: ${size(backends) == 1 && backends[0].serviceName != ""}
+      scheme: http
+      host: ${backends[0].serviceName}.${metadata.namespace}.svc.cluster.local
+      port: ${backends[0].port}
+      security:
+        scheme: none
+    external:
+      includeWhen: ${gateway.?ingress.?external.?http.hasValue()}
+      scheme: http
+      host: ${metadata.environmentName}-${metadata.endpointName}.${gateway.ingress.external.http.host}
+      port: ${gateway.ingress.external.http.port}
+      security:
+        scheme: none

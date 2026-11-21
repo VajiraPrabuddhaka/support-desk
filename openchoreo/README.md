@@ -1,8 +1,8 @@
 # Deploy the Support Desk on OpenChoreo
 
-This guide walks you through deploying the support desk on a local OpenChoreo cluster, by applying the YAML files in this folder with `kubectl`. The two agents run as OpenChoreo **Agents**, Gitea, Lago and the support desk console run as **Components**, and Lago's database and Redis are **Resources**. OpenChoreo builds the two agents and the console from this repository on GitHub. The OpenChoreo artifacts are kept in this folder, so the whole deployment lives next to the code.
+This guide walks you through deploying the support desk on a local OpenChoreo cluster, by applying the YAML files in this folder with `kubectl`. The two agents run as OpenChoreo **Agents**, each with an **Endpoint** for its A2A endpoint, Gitea, Lago and the support desk console run as **Components**, and Lago's database and Redis are **Resources**. OpenChoreo builds the two agents and the console from this repository on GitHub. The OpenChoreo artifacts are kept in this folder, so the whole deployment lives next to the code.
 
-It needs OpenChoreo with the agent kinds (`Agent`, `AgentType`) and their builds, which are on the `feat/agent-kinds` branch.
+It needs OpenChoreo with the agent kinds (`Agent`, `AgentType`), their builds and the `A2A` endpoint protocol, which are on the `feat/agent-kinds` branch.
 
 ## Table of Contents
 
@@ -26,6 +26,7 @@ Everything belongs to one project, `support-desk`, in the `development` environm
 |---|---|---|
 | support-triage | Agent | `support-desk-agent` (ours), built by OpenChoreo's `dockerfile-builder` |
 | billing-agent | Agent | `support-desk-agent` (ours), built by OpenChoreo's `dockerfile-builder` |
+| support-triage-a2a, billing-agent-a2a | Endpoint | `a2a-http` (ours), one for the A2A endpoint of each agent |
 | gitea | Component | `web-application`, with two `persistent-volume-claim` traits |
 | gitea-mcp | Component | `service`, internal only |
 | lago-db | Resource | `postgres-partman` (ours) |
@@ -38,9 +39,10 @@ Everything belongs to one project, `support-desk`, in the `development` environm
 | lago-mcp | Component | `service`, internal only, built by OpenChoreo's `dockerfile-builder` |
 | desk-console | Component | `web-application`, built by OpenChoreo's `dockerfile-builder` |
 
-The three types marked "ours" are in `platform/`. They are namespaced in `default`, so nothing cluster-wide changes:
+The four types marked "ours" are in `platform/`. They are namespaced in `default`, so nothing cluster-wide changes:
 
 - **`support-desk-agent` (AgentType)** - Runs an agent as a Deployment that serves A2A. See the next section.
+- **`a2a-http` (EndpointType)** - Exposes the A2A endpoint of an agent, with A2A over HTTP. `support-desk-agent` allows it for the protocol `A2A`. See [How the A2A Endpoints Are Exposed](#how-the-a2a-endpoints-are-exposed).
 - **`postgres-partman` (ResourceType)** - The shipped `postgres` type with Lago's image, which has the `pg_partman` extension that Lago's migrations install. The shipped type runs plain `postgres:16-alpine`.
 - **`worker-with-shared-volume` (ComponentType)** - The shipped `worker` type plus one volume owned by another component. `lago-worker` writes invoice PDFs to the volume that `lago-api` serves them from. The shipped types allow only the traits they list, so a type of our own avoids changing them.
 
@@ -71,7 +73,7 @@ The release freezes both, so every release records exactly what its agent ran wi
 The AgentType also renders the rest of what an agent needs:
 
 - **Tool addresses** - The addresses of `gitea-mcp`, `lago-mcp` and `billing-agent`, in the env vars that each tool's `envBindings` names (`GITEA_MCP_URL`, `LAGO_MCP_URL`, `BILLING_AGENT_URL`).
-- **A2A** - `LISTEN_ADDR` and `PUBLIC_URL` for the endpoint named `a2a`. `PUBLIC_URL` is the agent's in-cluster URL, so the agent card points to the same origin that callers resolve.
+- **A2A** - `LISTEN_ADDR` and `PUBLIC_URL` for the endpoint named `a2a`, which each agent declares with the protocol `A2A` in its `workload.yaml`. `PUBLIC_URL` is the agent's in-cluster URL, so the agent card points to the same origin that callers resolve.
 - **Env, files and secrets** - The workload's own env vars and files, with secrets from OpenBao through SecretReferences.
 
 **How credentials flow:**
@@ -80,6 +82,16 @@ The AgentType also renders the rest of what an agent needs:
 - **billing-agent → lago-mcp** - The agent sends no credentials. lago-mcp holds the Lago API key from the `support-desk-lago` secret (`LAGO_API_KEY`) and calls Lago with it.
 - **support-triage → billing-agent** - Plain A2A inside the cluster, with no authentication yet.
 - **desk-console → Gitea and Lago** - The support-inbox bot's Gitea token is a file mounted from the `support-desk-support-inbox` secret, and the Lago API key comes from `support-desk-lago`. The console only reads from Lago.
+
+### How the A2A Endpoints Are Exposed
+
+Each agent declares its A2A endpoint in `workload.yaml`, with the name `a2a` and the protocol `A2A`. OpenChoreo exposes it through an Endpoint, the way it exposes a component's endpoint:
+
+- **`allowedEndpoints`** - `support-desk-agent` allows the EndpointType `a2a-http` for the protocol `A2A`, as the default. A client that creates an agent's Endpoints (the portal, `occ`) picks it, and the files in `agents/` name it themselves.
+- **The Endpoint** - Each file in `agents/` has an Endpoint for the agent's `a2a` endpoint (`support-triage-a2a`, `billing-agent-a2a`). It is owned by the agent (`spec.owner.agentName`), so deleting the agent deletes it, and it deploys to `development` with `autoDeploy`.
+- **`a2a-http`** - Routes to the Service that `support-desk-agent` renders for the agent. It accepts A2A endpoints only, and serves `project` and `external` visibility. A2A runs over HTTP here, so an agent that serves A2A over gRPC would need a type of its own.
+
+The Endpoints ask for `project` visibility only, as both callers are in the project. Each one reports the agent's in-cluster URL on its EndpointReleaseBinding (`status.urls.project`), but the callers do not read it yet. support-triage gets billing-agent's address from `tools.a2a`, which resolves it from the agent's Service, and the console sets support-triage's address by hand. That is also why the Service stays in the AgentType for now. See [Known Limits](#known-limits).
 
 ---
 
@@ -189,7 +201,7 @@ A skill image holds the skill's files at its root, as the Agent controller and t
 kubectl apply -f openchoreo/platform/
 ```
 
-This adds the `support-desk-agent` AgentType, the `postgres-partman` ResourceType and the `worker-with-shared-volume` ComponentType.
+This adds the `support-desk-agent` AgentType, the `a2a-http` EndpointType, the `postgres-partman` ResourceType and the `worker-with-shared-volume` ComponentType.
 
 ### Step 4: Create the Project
 
@@ -294,7 +306,7 @@ These two secret references refresh every minute, so `gitea-mcp` starts shortly 
 
 ### Step 7: Deploy and Build the Agents
 
-Apply the two Agents. Each file applies the Agent's binding in `development` first, with the model, and then the Agent:
+Apply the two Agents. Each file applies the Agent's binding in `development` first, with the model, then the Agent, and then the Endpoint for the agent's A2A endpoint:
 
 ```bash
 kubectl apply -f openchoreo/agents/billing-agent.yaml -f openchoreo/agents/support-triage.yaml
@@ -316,6 +328,13 @@ kubectl wait --for=condition=Ready agentreleasebinding/billing-agent-development
 ```
 
 Once a build writes the Workload, the Agent controller pins the skills, cuts a release and binds it to `development`.
+
+The agents' Endpoints wait for the same Workloads, as an Endpoint checks the agent's `a2a` endpoint in it. Once the agents are deployed, each Endpoint deploys to `development` and reports the agent's in-cluster URL:
+
+```bash
+kubectl get endpoints.openchoreo.dev,endpointreleasebindings -n default
+kubectl get endpointreleasebinding billing-agent-a2a-development -n default -o jsonpath='{.status.urls.project}'
+```
 
 To deploy a change to an agent, push it to GitHub and apply a copy of its build file under a new name (for example, `support-triage-build-02`), as a WorkflowRun runs once. To change an agent's model, edit `OPENROUTER_MODEL` in its binding in `agents/<name>.yaml` and apply the file again. That needs no new build.
 
@@ -365,6 +384,7 @@ Check the state of the support desk:
 
 ```bash
 kubectl get agents,agentreleasebindings,workflowruns -n default
+kubectl get endpoints.openchoreo.dev,endpointreleasebindings -n default
 kubectl get releasebindings,resourcereleasebindings -n default
 kubectl get pods -n "$NS"
 ```
@@ -385,9 +405,9 @@ The hostnames follow OpenChoreo's naming, `<endpoint>-<component>-<environment>-
 
 ```
 openchoreo/
-├── platform/        the AgentType, ResourceType and ComponentType of the support desk
+├── platform/        the AgentType, EndpointType, ResourceType and ComponentType of the support desk
 ├── app/             the project, secret references, resources and components, the console included
-├── agents/          the two Agents, each with its binding in development
+├── agents/          the two Agents, each with its binding in development and its A2A Endpoint
 └── build/           the WorkflowRuns that build lago-mcp, the two agents and the console
 ```
 
@@ -402,6 +422,8 @@ Each agent's `Dockerfile` and `workload.yaml` are next to its code in `agents/<n
 - **Seed** - It runs from your machine, as there is no one-off job type.
 - **Environments** - Only `development`. An Agent deploys to the first environment of its project's pipeline.
 - **A2A** - The call between the agents is not authenticated yet.
+- **A2A Endpoints** - The callers do not use the URL that an agent's Endpoint reports yet, as an agent's `tools.a2a` resolves only from the Service that its callee's AgentType renders. That is why `support-desk-agent` still renders the Service, and `a2a-http` routes to it instead of rendering its own.
+- **External A2A** - `a2a-http` can expose an agent on the external gateway (`external` visibility), but an A2A client cannot call the agent through it yet. The agent card carries the agent's in-cluster `PUBLIC_URL`, so the client is sent to an address it cannot reach. The Endpoints ask for `project` visibility only.
 - **Agent credentials** - The agents carry none for now. gitea-mcp and lago-mcp act with their own credentials for any caller in the project, and lago-mcp offers every Lago tool, as the tool allowlist lives in billing-agent.
 - **Console to agent** - A Component cannot declare a dependency on an Agent yet, so the console's Workload sets support-triage's address by hand.
 - **Console sign-in** - The console has no sign-in. Anyone who can open its URL can file and triage tickets, which is fine for a local cluster only.
@@ -420,4 +442,4 @@ kubectl delete -f openchoreo/build/ --ignore-not-found
 kubectl delete -f openchoreo/app/
 ```
 
-Deleting an Agent also deletes its releases and the Workload that its build wrote. `kubectl` goes through the files in `app/` in alphabetical order, so the project and the secret references go last. The platform kinds in `platform/` and the values in OpenBao stay. Remove them with `kubectl delete -f openchoreo/platform/` and from OpenBao if you no longer need them.
+Deleting an Agent also deletes its releases, its Endpoint and the Workload that its build wrote. `kubectl` goes through the files in `app/` in alphabetical order, so the project and the secret references go last. The platform kinds in `platform/` and the values in OpenBao stay. Remove them with `kubectl delete -f openchoreo/platform/` and from OpenBao if you no longer need them.

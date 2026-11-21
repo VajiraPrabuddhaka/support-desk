@@ -7,9 +7,10 @@ metadata:
   name: support-triage
 
 endpoints:
-  # The AgentType serves A2A on the endpoint named a2a.
+  # The AgentType serves A2A on the endpoint named a2a, which has to have the
+  # protocol A2A. A2A runs over HTTP, so the agent's callers get an http address.
   - name: a2a
-    type: HTTP
+    type: A2A
     port: 8001
 
 configurations:

@@ -9,11 +9,15 @@
 #   at /skills/<name>. AGENT_SKILLS_DIR names the folder.
 # - The addresses of its MCP tools and A2A agents, in the env vars that its tools'
 #   envBindings name.
-# - LISTEN_ADDR and PUBLIC_URL for its A2A endpoint, which must be named "a2a".
-#   PUBLIC_URL is the agent's in-cluster URL, so the agent card it serves points to
-#   the same origin that its callers resolve.
+# - LISTEN_ADDR and PUBLIC_URL for its A2A endpoint, which must be named "a2a" and
+#   have the protocol A2A. PUBLIC_URL is the agent's in-cluster URL, so the agent
+#   card it serves points to the same origin that its callers resolve.
+# - A Service for its A2A endpoint, named after the agent.
 # - The env vars, files and secrets of its workload, rendered the way the shipped
 #   component types render them.
+#
+# An Endpoint exposes the A2A endpoint of an agent of this type through the
+# EndpointType a2a-http (endpoint-type.yaml), which allowedEndpoints names.
 #
 # Not here yet: per-dependency tokens and an egress policy. Both belong to the
 # identity work; the agents call OpenRouter, so egress is open.
@@ -33,6 +37,17 @@ spec:
   allowedWorkflows:
     - kind: ClusterWorkflow
       name: dockerfile-builder
+
+  # An A2A endpoint of an agent of this type is exposed through an Endpoint of
+  # a2a-http, which serves A2A over HTTP. It is the default for A2A, so a client
+  # that creates an agent's Endpoints (the portal, occ) picks it. The Endpoints in
+  # openchoreo/agents/ name it themselves.
+  allowedEndpoints:
+    - protocols: [A2A]
+      ref:
+        kind: EndpointType
+        name: a2a-http
+      default: true
 
   environmentConfigs:
     openAPIV3Schema:
@@ -68,6 +83,8 @@ spec:
       message: "Agents of this type need a system prompt: set spec.systemPrompt.value or spec.systemPrompt.valueFrom.workloadFile."
     - rule: ${"a2a" in workload.endpoints}
       message: "Agents of this type serve A2A on an endpoint named a2a."
+    - rule: ${workload.endpoints.?a2a.?protocol.orValue("") == "A2A"}
+      message: "The a2a endpoint of an agent of this type needs the protocol A2A."
     - rule: ${skills.items.all(s, !s.hasScripts)}
       message: "Skills with a scripts/ directory need a sandboxed agent type."
 
@@ -164,7 +181,9 @@ spec:
                       + skills.items.transformList(i, s, {"name": "skill-" + string(i), "mountPath": "/skills/" + s.name, "readOnly": true})}
 
     # Callers resolve the agent's A2A address from this Service, so it is named
-    # after the agent and PUBLIC_URL above uses the same name.
+    # after the agent and PUBLIC_URL above uses the same name. The agent's Endpoint
+    # (a2a-http) routes to it as well. It stays here until an agent's tools.a2a can
+    # resolve the address that the Endpoint reports.
     - id: service
       template:
         apiVersion: v1

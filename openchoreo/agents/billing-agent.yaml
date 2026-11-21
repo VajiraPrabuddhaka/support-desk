@@ -102,3 +102,29 @@ spec:
       - name: billing-policy
         source:
           oci: host.k3d.internal:10082/support-desk/skills/billing-policy:v1
+---
+# billing-agent's A2A endpoint, exposed through a2a-http, the type that
+# support-desk-agent allows for A2A. The Endpoint is the agent's, so deleting the
+# agent deletes it. It asks for project visibility only, which is where
+# support-triage calls the agent from: its EndpointReleaseBinding reports the
+# agent's in-cluster URL. support-triage still gets that address from tools.a2a.
+apiVersion: openchoreo.dev/v1alpha1
+kind: Endpoint
+metadata:
+  name: billing-agent-a2a
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    agentName: billing-agent
+  type:
+    kind: EndpointType
+    name: a2a-http
+  visibility: [project]
+  backendRefs:
+    - name: billing-agent
+      kind: Agent
+      agent:
+        name: billing-agent
+        endpoint: a2a
+  autoDeploy: true
