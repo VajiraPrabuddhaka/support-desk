@@ -24,7 +24,7 @@ spec:
         # The model is a choice of the environment, not of the build. Any
         # OpenRouter model with tool calling works, for example a free one such
         # as nvidia/nemotron-3-ultra-550b-a55b:free.
-        - {key: OPENROUTER_MODEL, value: anthropic/claude-haiku-5.5}
+        - {key: OPENROUTER_MODEL, value: nvidia/nemotron-3-ultra-550b-a55b:free}
 ---
 apiVersion: openchoreo.dev/v1alpha1
 kind: Agent
