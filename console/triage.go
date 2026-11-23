@@ -204,7 +204,7 @@ func (j *job) addParts(parts a2a.ContentParts) {
 			continue
 		}
 		if text := p.Text(); text != "" {
-			if thought, _ := p.Metadata["adk_thought"].(bool); thought || strings.TrimSpace(text) == "" {
+			if isThought(p) || strings.TrimSpace(text) == "" {
 				continue
 			}
 			j.Summary = strings.TrimSpace(text)
@@ -217,7 +217,7 @@ func (j *job) addParts(parts a2a.ContentParts) {
 		}
 		name, _ := data["name"].(string)
 		id, _ := data["id"].(string)
-		switch kind, _ := p.Metadata["adk_type"].(string); kind {
+		switch partKind(p) {
 		case "function_call":
 			args, _ := data["args"].(map[string]any)
 			s := describeCall(name, args)
@@ -228,6 +228,35 @@ func (j *job) addParts(parts a2a.ContentParts) {
 			j.completeCall(id, name, resp)
 		}
 	}
+}
+
+// The labels that an agent's runtime puts on a part. ADK labels a tool call
+// adk_type and a thought of the model adk_thought. kagent relabels both with
+// its own keys, so the console reads either: the agents run on both.
+var (
+	partKindKeys = []string{"adk_type", "kagent.dev/a2a/part-type"}
+	thoughtKeys  = []string{"adk_thought", "kagent.dev/a2a/thought"}
+)
+
+// partKind is function_call or function_response for a data part that carries
+// one, and empty otherwise.
+func partKind(p *a2a.Part) string {
+	for _, key := range partKindKeys {
+		if kind, _ := p.Metadata[key].(string); kind != "" {
+			return kind
+		}
+	}
+	return ""
+}
+
+// isThought is true for text that is the model's reasoning, not its answer.
+func isThought(p *a2a.Part) bool {
+	for _, key := range thoughtKeys {
+		if thought, _ := p.Metadata[key].(bool); thought {
+			return true
+		}
+	}
+	return false
 }
 
 // completeCall marks the call done or failed, and adds billing-agent's answer
