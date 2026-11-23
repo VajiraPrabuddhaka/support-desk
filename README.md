@@ -8,6 +8,8 @@ A small web console comes with it. You can see the tickets, file new ones and tr
 
 The same support desk also runs on OpenChoreo, with the agents as OpenChoreo Agents. OpenChoreo builds the agents and the console from this repository. See [openchoreo/README.md](openchoreo/README.md).
 
+On OpenChoreo the two agents can also run on kagent, where every conversation with an agent runs in its own sandbox. That variant has the agents written again for kagent, and its own AgentType. See [kagent/README.md](kagent/README.md).
+
 ## Table of Contents
 
 - [The Story](#the-story)
@@ -353,6 +355,7 @@ support-triage accepts plain http to billing-agent only when `A2A_ALLOW_HTTP=tru
 │   ├── seed/               creates the scenarios in Gitea and Lago
 │   └── ask/                a small A2A client
 ├── openchoreo/             the OpenChoreo deployment (see openchoreo/README.md)
+├── kagent/                 the two agents for kagent, with their OpenChoreo kinds (see kagent/README.md)
 ├── infra/gitea/            creates the Gitea admin account
 ├── scripts/init-env.sh     creates .env with generated secrets
 ├── compose.yaml            agents, console, MCP servers, Gitea and Lago

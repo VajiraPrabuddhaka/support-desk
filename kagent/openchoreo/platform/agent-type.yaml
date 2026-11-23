@@ -1,0 +1,311 @@
+# AgentType that runs an agent on kagent 1.0.1 and Agent Substrate.
+#
+# kagent has no Deployment per agent. Every conversation with an agent runs in
+# its own sandbox, on the worker pods of the project's WorkerPool, and callers
+# reach the agent through kagent's gateway. So this type renders kagent objects,
+# and kagent turns them into what Substrate runs:
+#
+#   From the Agent                           kagent object
+#   image, command and plain env vars        Harness (bring your own image)
+#   system prompt, skills, MCP tool lists    Agent
+#   each MCP server under tools.mcp          RemoteMCPServer
+#   the model Resource under models          ModelConfig
+#   each agent under tools.a2a               EgressPolicy
+#
+# What an agent of this type has to be:
+# - An image that speaks kagent's runtime contract (see /kagent/internal/kit),
+#   pinned by digest, with an explicit command. kagent refuses a tag. So the
+#   Agent brings its workload inline: OpenChoreo's build writes a tag.
+# - Free of stored secrets and files. A sandbox starts from a snapshot of the
+#   process, and Substrate copies env values into it. The model's key stays in
+#   a Secret, and Substrate's egress gateway adds it to each call.
+#
+# What the type adds around the kagent objects:
+# - A NetworkPolicy per MCP server, which admits Substrate's egress gateway. An
+#   agent's calls leave from that gateway, not from the project's own pods, and
+#   OpenChoreo's policy admits only those.
+# - A Service named after the agent, which points to kagent's gateway. kagent
+#   serves the agent's A2A endpoint there, at /agents/<namespace>/<agent>.
+#   OpenChoreo reads an agent's address from a Service, so without it an Agent
+#   that names this one under tools.a2a would never resolve.
+#
+# It needs kagent and Substrate in the data plane, the WorkerPool that the
+# ProjectType agents-kagent renders, and cluster-agent-rbac.yaml.
+#
+# Not here yet: credentials between agents and tools. An agent calls another
+# agent without a token, which kagent accepts in its `insecure` mode only.
+apiVersion: openchoreo.dev/v1alpha1
+kind: AgentType
+metadata:
+  name: agent-kagent
+  namespace: default
+  labels:
+    openchoreo.dev/ai-category: agent
+    openchoreo.dev/agent-runtime: kagent
+  annotations:
+    openchoreo.dev/display-name: "Agent on kagent"
+    openchoreo.dev/description: >-
+      Runs an agent on kagent and Agent Substrate. Every conversation runs in
+      its own sandbox, and the sandbox holds no credentials.
+spec:
+  # kagent runs the agent on Agent Substrate. No object of this type is a
+  # Kubernetes workload, so OpenChoreo takes the readiness from readyWhen below.
+  workloadType: agent-substrate
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        snapshotLocation:
+          type: string
+          default: s3://ate-snapshots
+          description: >-
+            Where Substrate keeps this environment's snapshots. The default is
+            the bucket that kagent's installer creates.
+        registry:
+          type: string
+          default: host.k3d.internal:10082
+          description: >-
+            The cluster's own registry, under the name that the nodes and
+            OpenChoreo use for it. An Agent names its image and its skills there.
+        substrateRegistry:
+          type: string
+          default: localhost:10082
+          description: >-
+            The same registry under the name that Substrate pulls it by.
+            Substrate pulls images itself, over HTTPS unless the name is
+            localhost, and its atelet maps localhost to the registry's address
+            (--localhost-registry-replacement).
+
+  preRenderValidations:
+    - rule: ${workload.container.image.matches("^[^\\s@]+@sha256:[a-f0-9]{64}$") && has(workload.container.command)}
+      message: "kagent needs an image pinned by digest (repo@sha256:...) and an explicit command."
+    - rule: ${agent.?systemPrompt.orValue("") != ""}
+      message: "Agents of this type need a system prompt: set spec.systemPrompt.value."
+    - rule: ${size(agent.models.resources) == 1 && size(agent.models.endpoints) == 0}
+      message: "Agents of this type name one model Resource under spec.models.resources. kagent binds one ModelConfig to an agent."
+    - rule: ${agent.models.resources.all(r, r.resourceType == "llm-model")}
+      message: "The model Resource must be of the ResourceType llm-model."
+    - rule: ${dependencies.resources.all(r, r.role == "model")}
+      message: "Agents of this type can use a model Resource only. Other Resources hand over secrets or files, which a sandbox cannot hold."
+    - rule: ${size(configurations.secrets.envs) == 0 && size(configurations.secrets.files) == 0}
+      message: "Agents of this type hold no stored secrets. Substrate copies env values into snapshots."
+    - rule: ${size(configurations.configs.files) == 0}
+      message: "kagent cannot mount a workload file into the sandbox. Use an env var, or put the file in the image."
+    - rule: ${dependencies.envVars.all(e, !has(e.valueFrom)) && size(dependencies.volumes) == 0}
+      message: "Agents of this type take literal values only. Bind an output that is a plain value."
+    # kagent opens egress to the endpoint that an OTEL_ exporter variable names.
+    - rule: ${configurations.configs.envs.all(e, !e.name.startsWith("OTEL_")) && dependencies.envVars.all(e, !e.name.startsWith("OTEL_"))}
+      message: "Remove the OTEL_ env vars. On kagent they can open egress to the endpoint they name."
+    # A RemoteMCPServer and an EgressPolicy need the address. While this rule
+    # fails, nothing of the binding is applied.
+    - rule: ${dependencies.items.all(d, has(d.url))}
+      message: "A dependency has no address yet. agent-kagent renders once every tool and agent it names is deployed."
+    - rule: ${dependencies.items.all(d, d.role == "tool" || d.role == "subAgent")}
+      message: "Agents of this type reach MCP servers (tools.mcp) and other agents (tools.a2a) only."
+    - rule: ${dependencies.items.all(d, d.project == metadata.projectName)}
+      message: "The tools and agents of an agent of this type must be in its own project, where the type can admit Substrate's egress gateway."
+    - rule: ${dependencies.items.all(d, d.onBehalfOf == "self")}
+      message: "This type sends no caller identity yet. Remove onBehalfOf: caller."
+    # Every rule is evaluated, so this one and the one on envBindings below skip a
+    # dependency without an address. The rule above reports it.
+    - rule: ${dependencies.items.all(d, !has(d.url) || d.url.scheme in ["http", "https"])}
+      message: "Substrate's egress carries HTTP and HTTPS only."
+    # Without a list, kagent shows the model every tool of the server.
+    - rule: ${dependencies.items.all(d, d.role != "tool" || (type(d.tools) == list && size(d.tools) > 0 && size(d.tools) <= 50))}
+      message: "List the tools the agent uses of each MCP server (tools.mcp[].tools), at most 50."
+    - rule: ${dependencies.items.all(d, d.role != "subAgent" || !has(d.url) || size(d.envVars) > 0)}
+      message: "Bind the address of each agent under tools.a2a to an env var (envBindings.address)."
+    # kagent serves the agent's A2A endpoint on its gateway, so that is the port
+    # an agent of this type declares.
+    - rule: ${workload.endpoints.all(name, workload.endpoints[name].port == 8083)}
+      message: "kagent serves an agent's endpoint on its gateway. Declare it with port 8083."
+
+  resources:
+    # The developer's image as a kagent bring-your-own Harness. kagent takes
+    # literal env values only, and every entry needs a value.
+    #
+    # The env var of an agent under tools.a2a gets that agent's endpoint on
+    # kagent's gateway, <the agent's Service>/agents/<namespace>/<agent>. The
+    # Service is the one this type renders for the other agent (see below), so
+    # both agents have to be on this type.
+    - id: harness
+      template:
+        apiVersion: api.kagent.dev/v1alpha3
+        kind: Harness
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          byo: {}
+          workload:
+            # Substrate pulls the image itself, so it gets Substrate's name for
+            # the cluster's registry. An image elsewhere stays as it is.
+            image: ${workload.container.image.replace(environmentConfigs.registry + "/", environmentConfigs.substrateRegistry + "/")}
+            command: ${workload.container.command}
+            args: |
+              ${has(workload.container.args) ? workload.container.args : oc_omit()}
+          env: |
+            ${dependencies.envVars.map(e, {"name": e.name, "value":
+                dependencies.items.exists(d, d.role == "subAgent" && d.envVars.exists(x, x.name == e.name))
+                  ? dependencies.items.filter(d, d.role == "subAgent" && d.envVars.exists(x, x.name == e.name))
+                      .map(d, d.url.origin + "/agents/" + metadata.namespace + "/" + d.agent)[0]
+                  : (has(e.value) ? e.value : "")})
+              + configurations.configs.envs.map(e, {"name": e.name, "value": e.value})
+              + [{"name": "AGENT_ID", "value": metadata.agentNamespace + "/" + metadata.projectName + "/"
+                  + metadata.agentName + "@" + metadata.environmentName}]}
+          substrate:
+            workerPoolRef:
+              name: agents                      # rendered in every project namespace by the ProjectType agents-kagent
+            snapshotPolicy:
+              location: ${environmentConfigs.snapshotLocation}/${metadata.namespace}/
+
+    # The kagent Agent, named after the Agent on OpenChoreo. kagent's gateway
+    # serves it at /agents/<namespace>/<name>, so the name is part of its address.
+    #
+    # Without readyWhen the agent would count as ready as soon as its objects
+    # exist. kagent reports the egress grants in a condition of their own.
+    - id: agent
+      readyWhen: |
+        ${has(applied.agent.status) && has(applied.agent.status.conditions)
+          && applied.agent.status.conditions.exists(c, c.type == "Ready" && c.status == "True")
+          && applied.agent.status.conditions.all(c, c.type != "EgressPoliciesApplied" || c.status == "True")}
+      template:
+        apiVersion: api.kagent.dev/v1alpha3
+        kind: Agent
+        metadata:
+          name: ${metadata.agentName}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          harnessRef:
+            name: ${metadata.name}
+          egressPolicyRefs: |
+            ${dependencies.items.exists(d, d.role == "subAgent") ? [{"name": metadata.name}] : oc_omit()}
+          template:
+            inline:
+              description: ${metadata.agentName}
+              systemPrompt: ${agent.systemPrompt}
+              modelConfig:
+                name: ${metadata.name}-model
+              tools: |
+                ${dependencies.items.filter(d, d.role == "tool").map(d, {"mcp": {
+                    "server": {"kind": "RemoteMCPServer", "name": oc_generate_name(metadata.name, d.component, d.endpoint)},
+                    "tools": d.tools}})}
+              # Each skill is an image pinned by digest, which Substrate mounts
+              # into the sandbox without opening egress. As for the workload's
+              # image, it gets Substrate's name for the cluster's registry.
+              skills: |
+                ${skills.items.map(s, {"name": s.name, "source": {"oci":
+                    s.ref.replace(environmentConfigs.registry + "/", environmentConfigs.substrateRegistry + "/")}})}
+
+    # The model Resource as a kagent ModelConfig. The Resource's outputs say
+    # what to call and which Secret holds the key (see llm-model.yaml). kagent
+    # gives the agent a placeholder, and Substrate's egress gateway puts the key
+    # in its place. Substrate's credential provider needs a grant for the
+    # project's namespace to read that Secret (see the README).
+    - id: model
+      forEach: ${dependencies.resources.filter(r, r.role == "model")}
+      var: r
+      template:
+        apiVersion: api.kagent.dev/v1alpha3
+        kind: ModelConfig
+        metadata:
+          name: ${metadata.name}-model
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          provider: OpenAI                      # the model ResourceType serves the OpenAI API
+          model: ${r.outputs.model}
+          apiKeySecret: ${r.outputs.apiKeySecretName}
+          apiKeySecretKey: ${r.outputs.apiKeySecretKey}
+          openAI:
+            baseUrl: ${r.outputs.baseUrl}
+            maxTokens: ${int(r.outputs.maxTokens)}
+
+    # One RemoteMCPServer per MCP server. The agent sends no credentials: the
+    # servers of the support desk hold their own. kagent's controller would also
+    # list each server's tools from its own pod, which the server's
+    # NetworkPolicy does not admit, so that discovery is off. The agent lists
+    # the tools itself, from its sandbox.
+    - id: mcp-server
+      forEach: ${dependencies.items.filter(d, d.role == "tool")}
+      var: d
+      template:
+        apiVersion: api.kagent.dev/v1alpha3
+        kind: RemoteMCPServer
+        metadata:
+          name: ${oc_generate_name(metadata.name, d.component, d.endpoint)}
+          namespace: ${metadata.namespace}
+          labels: '${oc_merge(metadata.labels, {"kagent.dev/discovery": "disabled"})}'
+        spec:
+          description: ${d.project + "/" + d.component}
+          protocol: STREAMABLE_HTTP
+          url: ${d.url.origin + d.url.path}
+
+    # An agent's calls reach an MCP server from Substrate's egress gateway. The
+    # server's own policy (OpenChoreo's) admits the pods of the project only, so
+    # this one admits the gateway on the server's port. The cost: for agents on
+    # kagent the network no longer tells projects apart, and Substrate's
+    # per-agent egress rules do that instead.
+    - id: mcp-ingress
+      forEach: ${dependencies.items.filter(d, d.role == "tool")}
+      var: d
+      template:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: ${oc_generate_name(metadata.name, d.component, d.endpoint)}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          podSelector:
+            matchLabels:
+              openchoreo.dev/component: ${d.component}
+          policyTypes: [Ingress]
+          ingress:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: ate-system
+                  podSelector:
+                    matchLabels:
+                      app: atenet-egress
+              ports:
+                - protocol: TCP
+                  port: ${d.targetPort}
+
+    # The agents under tools.a2a. kagent 1.0.1 has no agent-to-agent binding, so
+    # another agent is an egress destination that the image calls itself.
+    - id: egress-policy
+      includeWhen: ${dependencies.items.exists(d, d.role == "subAgent")}
+      template:
+        apiVersion: api.kagent.dev/v1alpha3
+        kind: EgressPolicy
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          destinations: |
+            ${dependencies.items.filter(d, d.role == "subAgent").map(d, {"origin": d.url.origin})}
+
+    # The agent's address for OpenChoreo: a Service named after the agent, which
+    # points to kagent's gateway. Its port is the one the workload declares for
+    # its endpoint (8083, the gateway's), which is how OpenChoreo matches the
+    # two. It stays here until an agent's tools.a2a can resolve the address that
+    # an Endpoint reports.
+    - id: gateway-alias
+      includeWhen: ${size(workload.endpoints) > 0}
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${metadata.agentName}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          type: ExternalName
+          externalName: kagent-controller.kagent.svc.cluster.local   # kagent's controller, which is its gateway
+          ports: ${workload.toServicePorts()}

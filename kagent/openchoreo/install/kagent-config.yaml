@@ -1,0 +1,11 @@
+# Configuration of the kagent CLI for this sample:
+#   kagent --config kagent/openchoreo/install/kagent-config.yaml install
+#
+# The installer passes its own defaults first and these files after them.
+install:
+  kagent:
+    valuesFiles: [kagent-values.yaml]
+  substrate:
+    valuesFiles: [substrate-values.yaml]
+  atelet:
+    valuesFiles: [atelet-values.yaml]

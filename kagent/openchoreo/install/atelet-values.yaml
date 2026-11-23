@@ -1,0 +1,9 @@
+# Values for the atelet chart (Substrate's node agent).
+#
+# The atelet pulls the agents' images and skills itself, over HTTPS unless the
+# registry is localhost. The cluster's own registry serves plain HTTP, so
+# agent-kagent names it localhost:10082 for Substrate, and this maps localhost
+# to where the registry is.
+atelet:
+  extraArgs:
+    - --localhost-registry-replacement=registry.openchoreo-workflow-plane.svc.cluster.local:10082

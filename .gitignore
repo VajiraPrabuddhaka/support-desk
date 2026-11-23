@@ -1,3 +1,6 @@
 .env
 .env.tmp
 .secrets/
+
+# kagent CLI, downloaded by kagent/README.md
+.tools/

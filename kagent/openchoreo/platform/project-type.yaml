@@ -1,0 +1,88 @@
+# ProjectType for a project whose agents run on kagent: the shipped `default`
+# type, plus a Substrate WorkerPool in the project's namespace.
+#
+# kagent runs every conversation of an agent as a sandbox on the worker pods of
+# a WorkerPool, and it looks for that pool in the agent's own namespace. So each
+# project namespace needs one. agent-kagent (agent-type.yaml) names the pool
+# `agents` in every Harness it renders.
+#
+# What a project of this type gets in each environment:
+# - The cell namespace, as `default` renders it.
+# - A ServiceAccount for the worker pods. It has no RBAC, as the pool that
+#   kagent's installer creates.
+# - The WorkerPool `agents`, with the two labels by which kagent finds it.
+#
+# A project's type cannot change, so create the project with this type from the
+# start (see ../app/project.yaml).
+#
+# It needs kagent and Substrate in the data plane, and a ClusterRole that lets
+# OpenChoreo's cluster agent apply WorkerPools (cluster-agent-rbac.yaml).
+apiVersion: openchoreo.dev/v1alpha1
+kind: ProjectType
+metadata:
+  name: agents-kagent
+  namespace: default
+  annotations:
+    openchoreo.dev/display-name: "Project with agents on kagent"
+    openchoreo.dev/description: "The cell namespace per environment, with a Substrate WorkerPool for agents that run on kagent"
+spec:
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        namespaceLabels:
+          type: object
+          additionalProperties: {type: string}
+          default: {}
+        namespaceAnnotations:
+          type: object
+          additionalProperties: {type: string}
+          default: {}
+        workers:
+          type: integer
+          minimum: 1
+          default: 1
+          description: The number of worker pods. The sandboxes of the project's agents share them.
+        workerImage:
+          type: string
+          default: ghcr.io/kagent-dev/substrate/ateworker-gvisor:v1.0.0
+          description: Substrate's worker image. Keep it on the version of Substrate in the data plane.
+
+  resources:
+    - id: cell-namespace
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${metadata.namespace}
+          labels: ${oc_merge(metadata.labels, environmentConfigs.namespaceLabels)}
+          annotations: ${environmentConfigs.namespaceAnnotations}
+
+    - id: kagent-worker-serviceaccount
+      template:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: agents-worker
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+
+    # The sandbox class and its SandboxConfig (gvisor-default) are the ones that
+    # kagent's installer sets up.
+    - id: kagent-worker-pool
+      template:
+        apiVersion: ate.dev/v1
+        kind: WorkerPool
+        metadata:
+          name: agents
+          namespace: ${metadata.namespace}
+          labels: '${oc_merge(metadata.labels, {"kagent.dev/worker-pool-name": "agents", "kagent.dev/worker-pool-namespace": metadata.namespace})}'
+        spec:
+          replicas: ${environmentConfigs.workers}
+          workerImage: ${environmentConfigs.workerImage}
+          sandboxClasses:
+            - name: gvisor
+              configRef:
+                name: gvisor-default
+          template:
+            serviceAccountName: agents-worker

@@ -1,0 +1,90 @@
+# ResourceType for a model that a provider serves over the OpenAI API, such as
+# OpenRouter. A Resource of this type is one model with its key, and an Agent
+# names it under spec.models.resources.
+#
+# The key stays out of the agent. The type copies it from the secret store into
+# a Secret of the project's namespace, and its outputs name that Secret. An
+# AgentType decides what to do with them: agent-kagent renders a kagent
+# ModelConfig, and Substrate's egress gateway adds the key to each call.
+#
+# Outputs, all plain values:
+# - baseUrl, model, maxTokens - What to call.
+# - apiKeySecretName, apiKeySecretKey - The Secret that holds the key.
+#
+# Which model is a choice of the environment, so it is in environmentConfigs
+# (the ResourceReleaseBinding).
+apiVersion: openchoreo.dev/v1alpha1
+kind: ResourceType
+metadata:
+  name: llm-model
+  namespace: default
+  annotations:
+    openchoreo.dev/display-name: "LLM model"
+    openchoreo.dev/description: "A model served over the OpenAI API by a provider, with its API key from the secret store"
+spec:
+  retainPolicy: Delete
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required: [apiKey]
+      properties:
+        baseUrl:
+          type: string
+          default: https://openrouter.ai/api/v1
+          description: The base URL of the provider's OpenAI-compatible API.
+        apiKey:
+          type: object
+          required: [key]
+          description: Where the provider's API key is in the secret store.
+          properties:
+            key:
+              type: string
+            property:
+              type: string
+              default: apiKey
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      required: [model]
+      properties:
+        model:
+          type: string
+          description: The model's name at the provider.
+        maxTokens:
+          type: integer
+          minimum: 1
+          default: 4096
+          description: The most tokens one reply may use.
+  outputs:
+    - name: baseUrl
+      value: ${parameters.baseUrl}
+    - name: model
+      value: ${environmentConfigs.model}
+    - name: maxTokens
+      value: ${string(int(environmentConfigs.maxTokens))}
+    - name: apiKeySecretName
+      value: ${metadata.name}-key
+    - name: apiKeySecretKey
+      value: apiKey
+  resources:
+    - id: api-key
+      template:
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata:
+          name: ${metadata.name}-key
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          refreshInterval: 1h
+          secretStoreRef:
+            name: ${dataplane.secretStore}
+            kind: ClusterSecretStore
+          target:
+            name: ${metadata.name}-key
+            creationPolicy: Owner
+          data:
+            - secretKey: apiKey
+              remoteRef:
+                key: ${parameters.apiKey.key}
+                property: ${parameters.apiKey.property}

@@ -1,0 +1,37 @@
+# The model of the two agents: a model on OpenRouter, with the key that
+# /openchoreo/README.md stores in OpenBao (Step 1). Each Agent names this
+# Resource under spec.models.resources, and agent-kagent renders a kagent
+# ModelConfig from it.
+apiVersion: openchoreo.dev/v1alpha1
+kind: Resource
+metadata:
+  name: openrouter
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+  type:
+    kind: ResourceType
+    name: llm-model
+  parameters:
+    baseUrl: https://openrouter.ai/api/v1
+    apiKey:
+      key: support-desk/openrouter
+      property: apiKey
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: ResourceReleaseBinding
+metadata:
+  name: openrouter-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    resourceName: openrouter
+  environment: development
+  retainPolicy: Delete
+  resourceTypeEnvironmentConfigs:
+    # The model is a choice of the environment. Any OpenRouter model with tool
+    # calling works, for example anthropic/claude-haiku-5.5.
+    model: nvidia/nemotron-3-ultra-550b-a55b:free
+    maxTokens: 4096

@@ -1,0 +1,7 @@
+# Values for the kagent chart.
+config:
+  sandboxes:
+    # The guest image for standalone sandboxes (sandbox-guest:1.0.1 by digest),
+    # which the chart leaves unset. The agents do not use it, and the
+    # controller needs it set.
+    guestImage: ghcr.io/kagent-dev/kagent/sandbox-guest@sha256:16e84a2285119ce02cc6ba45ea7f68181eb1527335de85477614fb9a6b5ecf03

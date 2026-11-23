@@ -1,0 +1,16 @@
+# Values for the Substrate chart.
+#
+# Which namespaces' Secrets the agents of a namespace may use. Substrate's egress
+# gateway adds the model's key to an agent's calls, and its credential provider
+# reads the key only where a grant allows it.
+#
+# A list in a values file replaces the installer's own, so the first entry is
+# the installer's (for the agents in the kagent namespace). The second is for
+# the support-desk project: its namespace in the data plane, which OpenChoreo
+# derives from the names default, support-desk and development.
+credentialProvider:
+  namespacePolicies:
+    - atespace: kagent
+      allowedNamespaces: [kagent]
+    - atespace: dp-default-support-desk-development-d9be60f2
+      allowedNamespaces: [dp-default-support-desk-development-d9be60f2]

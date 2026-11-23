@@ -1,0 +1,29 @@
+# The console's binding of /openchoreo/app/desk-console.yaml, with one more
+# setting: where support-triage is on kagent.
+#
+# kagent's gateway serves the agent at /agents/<namespace>/<agent>, and the
+# console needs the URL of its agent card. The namespace is the project's in
+# the data plane, which OpenChoreo derives from the names default, support-desk
+# and development, so it is the same on every cluster.
+#
+# Apply this file after /openchoreo/app/desk-console.yaml. Applying that file
+# again puts the console back on the address of the Deployment variant.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ReleaseBinding
+metadata:
+  name: desk-console-development
+  namespace: default
+spec:
+  owner:
+    projectName: support-desk
+    componentName: desk-console
+  environment: development
+  workloadOverrides:
+    container:
+      env:
+        - key: GITEA_PUBLIC_URL
+          value: http://http-gitea-development-default-e9dbaee7.openchoreoapis.localhost:19080
+        - key: LAGO_PUBLIC_URL
+          value: http://http-lago-ui-development-default-01c488b9.openchoreoapis.localhost:19080
+        - key: TRIAGE_AGENT_URL
+          value: http://kagent-controller.kagent.svc.cluster.local:8083/agents/dp-default-support-desk-development-d9be60f2/support-triage/.well-known/agent-card.json

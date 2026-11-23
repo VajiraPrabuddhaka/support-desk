@@ -4,6 +4,8 @@ This guide walks you through deploying the support desk on a local OpenChoreo cl
 
 It needs OpenChoreo with the agent kinds (`Agent`, `AgentType`), their builds, the `A2A` endpoint protocol and Endpoints that route to an Agent, which are on the `feat/agent-kinds` branch.
 
+Here each agent runs as a Deployment. To run the two agents on kagent, with every conversation in its own sandbox, see [kagent/README.md](../kagent/README.md).
+
 ## Table of Contents
 
 - [What Gets Deployed](#what-gets-deployed)

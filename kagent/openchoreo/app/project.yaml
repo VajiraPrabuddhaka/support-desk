@@ -1,0 +1,36 @@
+# The support-desk project for the kagent variant: the project of
+# /openchoreo/app/project.yaml, on the type agents-kagent. That type renders a
+# Substrate WorkerPool in the project's namespace, which the agents' sandboxes
+# run on.
+#
+# A project's type cannot change. If support-desk exists with the type
+# `default`, delete it first (see ../../README.md).
+apiVersion: openchoreo.dev/v1alpha1
+kind: Project
+metadata:
+  name: support-desk
+  namespace: default
+  labels:
+    openchoreo.dev/name: support-desk
+  annotations:
+    openchoreo.dev/display-name: Support desk
+    openchoreo.dev/description: GeoGrid's support desk - the triage and billing agents on kagent, Gitea and Lago
+spec:
+  deploymentPipelineRef:
+    name: default
+  type:
+    kind: ProjectType
+    name: agents-kagent
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: ProjectReleaseBinding
+metadata:
+  name: support-desk-development
+  namespace: default
+  labels:
+    openchoreo.dev/project: support-desk
+    openchoreo.dev/environment: development
+spec:
+  owner:
+    projectName: support-desk
+  environment: development
