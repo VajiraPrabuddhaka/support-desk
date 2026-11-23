@@ -307,6 +307,13 @@ done
 
 These two secret references refresh every minute, so `gitea-mcp` starts shortly after.
 
+> [!NOTE]
+> On a second deployment, OpenBao still has the tokens of the first one. `gitea-mcp` then starts right away, with a token that the new Gitea does not know, and every call to Gitea fails with `401 invalid username, password or token`. It reads the token once, from a file that does not follow the Secret. So restart it after you write the new tokens:
+>
+> ```bash
+> kubectl rollout restart deployment -n "$NS" -l openchoreo.dev/component=gitea-mcp
+> ```
+
 ### Step 7: Deploy and Build the Agents
 
 Apply the two Agents. Each file applies the Agent's binding in `development` first, with the model, then the Agent, and then the Endpoint for the agent's A2A endpoint:
